@@ -1,0 +1,57 @@
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
+
+export interface Database {
+  public: {
+    Tables: {
+      profiles: {
+        Row: any
+        Insert: any
+        Update: any
+      }
+      murals: {
+        Row: any
+        Insert: any
+        Update: any
+      }
+      mural_items: {
+        Row: any
+        Insert: any
+        Update: any
+      }
+      permissions: {
+        Row: any
+        Insert: any
+        Update: any
+      }
+      sessions: {
+        Row: any
+        Insert: any
+        Update: any
+      }
+      comments: {
+        Row: any
+        Insert: any
+        Update: any
+      }
+      activity_logs: {
+        Row: any
+        Insert: any
+        Update: any
+      }
+      favorites: {
+        Row: any
+        Insert: any
+        Update: any
+      }
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      [_ in never]: never
+    }
+    Enums: {
+      [_ in never]: never
+    }
+  }
+}
