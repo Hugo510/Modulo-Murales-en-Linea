@@ -10,7 +10,6 @@ let redirectionInProgress = false;
  * Realiza una redirección post-login de forma segura.
  */
 export function redirectAfterLogin(destination: string): void {
-  // Prevenir múltiples redirecciones
   if (redirectionInProgress) {
     console.log(
       "[Auth Redirect] Redirección ya en curso, ignorando solicitud adicional"
@@ -20,17 +19,15 @@ export function redirectAfterLogin(destination: string): void {
 
   redirectionInProgress = true;
 
-  // Marcar redirección en curso usando sessionStorage (persiste a través de redirecciones)
+  // Marcar redirección en curso
   sessionStorage.setItem("auth_redirect_in_progress", "true");
-
-  // Guardar timestamp de inicio de redirección
   sessionStorage.setItem("redirect_started_at", Date.now().toString());
 
   console.log(`[Auth Redirect] Iniciando redirección segura a: ${destination}`);
 
-  // CRÍTICO: Almacenar info de sesión en sessionStorage (persiste durante redirecciones)
+  // CRUCIAL: Sincronizar localStorage → sessionStorage → cookies
   try {
-    // Guardar datos críticos en sessionStorage también (sobrevive redirecciones)
+    // 1. Transferir datos de localStorage a sessionStorage
     if (localStorage.getItem("login_success")) {
       sessionStorage.setItem("login_success", "true");
     }
@@ -46,19 +43,25 @@ export function redirectAfterLogin(destination: string): void {
         localStorage.getItem("login_timestamp") || ""
       );
     }
+
+    // 2. También sincronizar a cookies para que middleware pueda acceder
+    document.cookie = `login_success=true; path=/; max-age=120`;
+    document.cookie = `login_timestamp=${Date.now()}; path=/; max-age=120`;
+    if (localStorage.getItem("auth_user_id")) {
+      document.cookie = `auth_user_id=${localStorage.getItem(
+        "auth_user_id"
+      )}; path=/; max-age=120`;
+    }
   } catch (e) {
-    console.error(
-      "[Auth Redirect] Error al almacenar datos en sessionStorage:",
-      e
-    );
+    console.error("[Auth Redirect] Error al sincronizar datos:", e);
   }
 
-  // Usar un procedimiento directo para redireccionar
-  try {
-    setTimeout(() => {
+  // Realizar redirección con una pequeña espera para permitir que se sincronicen datos
+  setTimeout(() => {
+    try {
       console.log(`[Auth Redirect] Ejecutando redirección a: ${destination}`);
 
-      // Crear una URL completa para asegurar que es absoluta
+      // Crear URL absoluta
       const baseUrl = window.location.origin;
       const fullUrl = destination.startsWith("http")
         ? destination
@@ -66,24 +69,24 @@ export function redirectAfterLogin(destination: string): void {
             destination.startsWith("/") ? destination : `/${destination}`
           }`;
 
-      // Añadir parámetro para evitar caching y señalar redirección en curso
+      // Añadir parámetros para bypassing de seguridad
       const urlWithParams = new URL(fullUrl);
       urlWithParams.searchParams.set("_auth_redirect", "true");
       urlWithParams.searchParams.set("_ts", Date.now().toString());
 
-      // SOLUCIÓN: Usar location.replace para forzar una navegación completa
+      // Realizar redirección. Usar replace para evitar historia de navegación
       window.location.replace(urlWithParams.toString());
 
-      // Como respaldo adicional, si replace no funciona
+      // Respaldo (por si replace no funciona)
       setTimeout(() => {
         window.location.href = urlWithParams.toString();
-      }, 250);
-    }, 100);
-  } catch (error) {
-    console.error("[Auth Redirect] Error durante redirección:", error);
-    redirectionInProgress = false;
-    sessionStorage.removeItem("auth_redirect_in_progress");
-  }
+      }, 150);
+    } catch (error) {
+      console.error("[Auth Redirect] Error durante redirección:", error);
+      redirectionInProgress = false;
+      sessionStorage.removeItem("auth_redirect_in_progress");
+    }
+  }, 50);
 
   // Limpiar estado si la redirección no se completa
   setTimeout(() => {

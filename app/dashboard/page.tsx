@@ -24,23 +24,65 @@ export default function DashboardPage() {
   })
   const [searchQuery, setSearchQuery] = useState("")
   const [isLoadingMurals, setIsLoadingMurals] = useState(true)
+  const [isLocalBypass, setIsLocalBypass] = useState(false)
+
+  // Detección de autenticación mejorada para evitar carga infinita
+  useEffect(() => {
+    // Detectar si acabamos de llegar de un login y crear bypass local
+    if (typeof window !== 'undefined') {
+      const isRedirect = new URLSearchParams(window.location.search).get("_auth_redirect") === "true";
+      const hasLoginSuccess = localStorage.getItem("login_success") === "true";
+      const userId = localStorage.getItem("auth_user_id");
+
+      if ((isRedirect || hasLoginSuccess) && userId) {
+        console.log("Dashboard: Detectada autenticación local válida");
+        setIsLocalBypass(true);
+
+        // Limpiar URL
+        if (isRedirect) {
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete("_auth_redirect");
+          cleanUrl.searchParams.delete("_ts");
+          window.history.replaceState({}, "", cleanUrl.toString());
+        }
+      }
+    }
+  }, []);
 
   // Simplificar la lógica de redirección ya que ahora la maneja el layout
   useEffect(() => {
-    if (user) {
-      console.log("Usuario autenticado en dashboard:", user.name);
+    if (user || isLocalBypass) {
+      if (user) {
+        console.log("Usuario autenticado en dashboard:", user.name);
+      } else {
+        console.log("Dashboard: Usando bypass local hasta que se cargue el usuario");
+      }
 
-      // Eliminar cualquier estado de redirección pendiente
+      // Limpiar estado de redirección
       localStorage.removeItem("auth_redirect");
-      localStorage.removeItem("auth_user_id");
-      localStorage.removeItem("login_success");
+
+      // Solo limpiar login flags si tenemos un usuario real
+      if (user && user.id) {
+        localStorage.removeItem("login_success");
+        localStorage.removeItem("login_timestamp");
+      }
     }
-  }, [user]);
+  }, [user, isLocalBypass]);
 
   // Cargar murales cuando cambian los filtros o el usuario
   useEffect(() => {
-    if (user) {
-      setIsLoadingMurals(true)
+    // Sólo cargar murales si hay un usuario o un bypass local
+    if (user || isLocalBypass) {
+      setIsLoadingMurals(true);
+
+      // Si tenemos un bypass pero no usuario, usar el ID del localStorage
+      const userId = user?.id || localStorage.getItem("auth_user_id") || "";
+
+      if (!userId) {
+        console.warn("Dashboard: No se pudo obtener ID de usuario para cargar murales");
+        setIsLoadingMurals(false);
+        return;
+      }
 
       // Crear una función asíncrona para poder usar await
       const loadMurals = async () => {
@@ -52,7 +94,7 @@ export default function DashboardPage() {
           }
 
           // Añadir await para esperar a que se resuelva la Promise
-          const userMurals = await getMuralsForUser(user.id, updatedFilters)
+          const userMurals = await getMuralsForUser(userId, updatedFilters)
           setMurals(userMurals)
         } catch (error) {
           console.error("Error al cargar murales:", error)
@@ -65,7 +107,7 @@ export default function DashboardPage() {
       // Ejecutar la función asíncrona
       loadMurals()
     }
-  }, [user, filters, searchQuery])
+  }, [user, isLocalBypass, filters, searchQuery])
 
   // Manejar cambios en los filtros
   const handleFilterChange = (newFilters: MuralFiltersType) => {
@@ -77,7 +119,8 @@ export default function DashboardPage() {
     // La búsqueda se aplica en el useEffect
   }
 
-  if (isLoading || !isAuthenticated) {
+  // MODIFICAR ESTA CONDICIÓN: Considerar isLocalBypass como válido para mostrar contenido
+  if ((isLoading || !isAuthenticated) && !isLocalBypass) {
     return (
       <div className="container mx-auto px-4 py-8">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
