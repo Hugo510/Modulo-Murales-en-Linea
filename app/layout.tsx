@@ -11,7 +11,7 @@ const inter = Inter({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "Murales Colaborativos",
   description: "Plataforma para la creación y gestión de murales colaborativos",
-    generator: 'v0.dev'
+  generator: 'v0.dev'
 }
 
 export default function RootLayout({
@@ -32,6 +32,3 @@ export default function RootLayout({
     </html>
   )
 }
-
-
-import './globals.css'

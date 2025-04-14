@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, useId } from "react"
 import { Loader2 } from "lucide-react"
 import { Label } from "@/components/ui/label"
 
@@ -30,10 +30,21 @@ export function EnhancedRecaptcha({
   const containerRef = useRef<HTMLDivElement>(null)
   const recaptchaId = useRef<number | null>(null)
   const [scriptLoaded, setScriptLoaded] = useState(false)
+  const isRendered = useRef(false)
+  const uniqueId = useId() // Genera un ID único para este componente
+  const renderAttemptCount = useRef(0)
 
-  // Cargar el script de reCAPTCHA
+  // Cargar el script de reCAPTCHA solo una vez
   useEffect(() => {
     if (window.grecaptcha) {
+      setScriptLoaded(true)
+      return
+    }
+
+    // Verificar si ya existe el script
+    const existingScript = document.querySelector('script[src*="recaptcha/api.js"]')
+
+    if (existingScript) {
       setScriptLoaded(true)
       return
     }
@@ -42,46 +53,74 @@ export function EnhancedRecaptcha({
     script.src = `https://www.google.com/recaptcha/api.js?render=explicit`
     script.async = true
     script.defer = true
-    script.onload = () => setScriptLoaded(true)
+
+    script.onload = () => {
+      setScriptLoaded(true)
+    }
+
     script.onerror = () => {
       setLoading(false)
       setError("No se pudo cargar reCAPTCHA. Por favor, intenta de nuevo más tarde.")
       if (onError) onError(new Error("Failed to load reCAPTCHA script"))
     }
+
     document.head.appendChild(script)
 
     return () => {
-      if (document.head.contains(script)) {
-        document.head.removeChild(script)
-      }
+      // No eliminamos el script al desmontar
     }
   }, [onError])
 
-  // Renderizar el reCAPTCHA cuando el script esté cargado
+  // Renderizar el reCAPTCHA cuando el script esté cargado - con mejoras
   useEffect(() => {
-    if (!scriptLoaded || !containerRef.current) return
+    // Si ya está renderizado o no tenemos el contenedor o el script no está cargado, no hacer nada
+    if (!scriptLoaded || !containerRef.current || isRendered.current) {
+      return
+    }
 
+    // Función para renderizar el captcha con retrasos exponenciales
     const renderCaptcha = () => {
+      renderAttemptCount.current += 1
+
+      // Si ya se ha renderizado, no intentar de nuevo
+      if (isRendered.current) {
+        return
+      }
+
+      // Si hemos intentado demasiadas veces, mostrar un error
+      if (renderAttemptCount.current > 5) {
+        setLoading(false)
+        setError("No se pudo inicializar reCAPTCHA. Por favor, recarga la página.")
+        return
+      }
+
+      // Comprobar si grecaptcha está disponible
       if (!window.grecaptcha || !window.grecaptcha.render) {
-        // Si grecaptcha no está completamente cargado, intentar de nuevo
-        setTimeout(renderCaptcha, 100)
+        // Esperar más tiempo entre intentos sucesivos (retraso exponencial)
+        const delay = Math.pow(2, renderAttemptCount.current) * 100
+        setTimeout(renderCaptcha, delay)
         return
       }
 
       try {
-        // Limpiar el contenedor si ya hay un reCAPTCHA renderizado
-        if (containerRef.current && containerRef.current.childNodes.length > 0) {
+        // Limpiar el contenedor completamente
+        if (containerRef.current) {
           containerRef.current.innerHTML = ""
         }
 
-        // Verificar de nuevo que containerRef.current no sea null justo antes de renderizar
-        if (!containerRef.current) {
-          console.error("El contenedor de reCAPTCHA no está disponible")
-          return
+        // Crear un div anidado con ID único para el captcha
+        const captchaContainer = document.createElement("div")
+        captchaContainer.id = `recaptcha-container-${uniqueId}`
+
+        // Añadir el contenedor al DOM
+        if (containerRef.current) {
+          containerRef.current.appendChild(captchaContainer)
+        } else {
+          throw new Error("El contenedor de reCAPTCHA no está disponible")
         }
 
         // Renderizar el reCAPTCHA
-        recaptchaId.current = window.grecaptcha.render(containerRef.current, {
+        recaptchaId.current = window.grecaptcha.render(captchaContainer, {
           sitekey: siteKey,
           theme,
           size: invisible ? "invisible" : size,
@@ -100,23 +139,62 @@ export function EnhancedRecaptcha({
           },
         })
 
+        // Marcar como renderizado exitosamente
+        isRendered.current = true
         setLoading(false)
       } catch (err) {
         console.error("Error al renderizar reCAPTCHA:", err)
-        setError("Error al inicializar reCAPTCHA. Por favor, recarga la página.")
-        setLoading(false)
-        if (onError) onError(err instanceof Error ? err : new Error("Unknown error rendering reCAPTCHA"))
+
+        // Si es un error específico de que ya se ha renderizado, marcar como renderizado
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        if (errorMessage.includes("already been rendered")) {
+          isRendered.current = true
+          setLoading(false)
+        } else {
+          // Para otros errores, limpiar e intentar de nuevo después de un retraso
+          if (containerRef.current) {
+            containerRef.current.innerHTML = ""
+          }
+
+          // Retrasos exponenciales entre reintentos
+          const delay = Math.pow(2, renderAttemptCount.current) * 100
+          setTimeout(renderCaptcha, delay)
+        }
       }
     }
 
+    // Iniciar el proceso de renderizado
     renderCaptcha()
 
+    // Limpiar al desmontar
     return () => {
       if (recaptchaId.current !== null && window.grecaptcha && window.grecaptcha.reset) {
-        window.grecaptcha.reset(recaptchaId.current)
+        try {
+          window.grecaptcha.reset(recaptchaId.current)
+        } catch (e) {
+          // Ignorar errores al resetear
+        }
       }
+      // Reset de referencias
+      recaptchaId.current = null
+      isRendered.current = false
+      renderAttemptCount.current = 0
     }
-  }, [scriptLoaded, siteKey, theme, size, tabIndex, invisible, onVerify, onExpired, onError])
+  }, [scriptLoaded, siteKey, theme, size, tabIndex, invisible, onVerify, onExpired, onError, uniqueId])
+
+  // Limpiar completamente cuando el componente se desmonta
+  useEffect(() => {
+    return () => {
+      // Limpiar el contenedor
+      if (containerRef.current) {
+        containerRef.current.innerHTML = ""
+      }
+      // Reset de referencias
+      isRendered.current = false
+      recaptchaId.current = null
+      renderAttemptCount.current = 0
+    }
+  }, [])
 
   // Método para resetear manualmente el captcha
   const reset = () => {

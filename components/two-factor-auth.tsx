@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Loader2, AlertCircle, CheckCircle2, Copy } from "lucide-react"
-import QRCode from "qrcode.react"
+import { QRCodeSVG } from "qrcode.react" // Corregido: Importar QRCodeSVG en lugar de QRCode
 import { useToast } from "@/components/ui/use-toast"
 
 interface TwoFactorAuthProps {
@@ -175,7 +175,14 @@ export function TwoFactorAuth({ userId, onComplete, onCancel, isSetup = false }:
         {isSetup && (
           <div className="flex flex-col items-center space-y-4">
             <div className="bg-white p-2 rounded-md">
-              <QRCode value={qrCodeUrl} size={200} />
+              <QRCodeSVG
+                value={qrCodeUrl}
+                size={200}
+                level="M" // Mayor corrección de errores para mejor escaneo
+                bgColor="#FFFFFF"
+                fgColor="#000000"
+                includeMargin={true}
+              />
             </div>
             <p className="text-sm text-muted-foreground">
               Si no puedes escanear el código QR, ingresa este código en tu aplicación:

@@ -43,14 +43,27 @@ export default function LoginPage() {
   const [userId, setUserId] = useState("")
   const [csrfToken, setCsrfToken] = useState("")
 
-  // Obtener token CSRF al cargar
+  // Obtener token CSRF al cargar - mejorado con reintento
   useEffect(() => {
     const fetchCsrfToken = async () => {
       try {
         const token = await getCsrfToken()
         setCsrfToken(token)
+        console.log("Token CSRF obtenido con éxito")
       } catch (error) {
-        console.error("Error al obtener token CSRF:", error)
+        console.error("Error inicial al obtener token CSRF:", error)
+
+        // Reintento después de un breve retraso
+        setTimeout(async () => {
+          try {
+            console.log("Reintentando obtener token CSRF...")
+            const token = await getCsrfToken()
+            setCsrfToken(token)
+            console.log("Token CSRF obtenido en segundo intento")
+          } catch (retryError) {
+            console.error("Error en reintento de token CSRF:", retryError)
+          }
+        }, 1500)
       }
     }
 
@@ -104,6 +117,12 @@ export default function LoginPage() {
       return
     }
 
+    // Verificar que tenemos un token CSRF
+    if (!csrfToken) {
+      setError("Error de seguridad: No se pudo obtener un token CSRF válido. Por favor, recarga la página.")
+      return
+    }
+
     // Verificar captcha si es necesario
     if (showRecaptcha && !recaptchaToken) {
       setError("Por favor, completa el captcha para continuar")
@@ -137,24 +156,32 @@ export default function LoginPage() {
         }),
       })
 
-      const loginData = await loginResponse.json()
-
+      // Manejo mejorado de errores HTTP
       if (!loginResponse.ok) {
-        setLoginAttempts((prev) => prev + 1)
+        const errorData = await loginResponse.json().catch(() => null);
+        setLoginAttempts((prev) => prev + 1);
 
-        if (loginAttempts + 1 >= 2) {
-          setShowRecaptcha(true)
-        }
-
-        if (loginAttempts + 1 >= 5) {
-          setError("Demasiados intentos fallidos. Tu cuenta ha sido bloqueada temporalmente.")
+        if (loginResponse.status === 403 && errorData?.error === "Token CSRF inválido") {
+          // Error específico de CSRF - recargar token
+          console.warn("Token CSRF inválido detectado, obteniendo uno nuevo...");
+          try {
+            const newToken = await getCsrfToken(true); // Forzar refresco
+            setCsrfToken(newToken);
+            setError("Error de seguridad: Por favor, intenta nuevamente el inicio de sesión");
+          } catch (csrfError) {
+            setError("Error de seguridad: No se pudo renovar el token. Por favor, recarga la página.");
+          }
+        } else if (loginAttempts + 1 >= 5) {
+          setError("Demasiados intentos fallidos. Tu cuenta ha sido bloqueada temporalmente.");
         } else {
-          setError(loginData.error || "Correo electrónico o contraseña incorrectos")
+          setError(errorData?.error || "Correo electrónico o contraseña incorrectos");
         }
 
-        setIsSubmitting(false)
-        return
+        setIsSubmitting(false);
+        return;
       }
+
+      const loginData = await loginResponse.json();
 
       // Verificar si se requiere 2FA
       if (loginData.requires2FA) {
@@ -188,7 +215,7 @@ export default function LoginPage() {
       }
     } catch (error) {
       console.error("Error al iniciar sesión:", error)
-      setError("Ocurrió un error al iniciar sesión")
+      setError("Ocurrió un error inesperado. Por favor, inténtalo de nuevo más tarde.")
     } finally {
       setIsSubmitting(false)
     }
@@ -232,15 +259,19 @@ export default function LoginPage() {
     }
   }
 
-  // Función para obtener la IP actual
+  // Función para obtener la IP actual del usuario
   const getCurrentIp = async (): Promise<string> => {
     try {
-      const response = await fetch("https://api.ipify.org?format=json")
-      const data = await response.json()
-      return data.ip
+      // Usar nuestro propio endpoint en lugar de ipify.org
+      const response = await fetch("/api/user-ip");
+      if (!response.ok) {
+        throw new Error(`Error: ${response.status}`);
+      }
+      const data = await response.json();
+      return data.ip || "unknown";
     } catch (error) {
-      console.error("Error al obtener IP:", error)
-      return "unknown"
+      console.error("Error al obtener IP:", error);
+      return "unknown";
     }
   }
 

@@ -4,7 +4,7 @@ import type { Database } from "@/lib/supabase/database.types";
 
 // Crear cliente de Supabase para el lado del servidor
 export const getSupabaseServer = async () => {
-  const cookieStore = cookies();
+  const cookieStore = await cookies(); // Añadido await aquí
 
   const supabaseUrl = process.env.SUPABASE_URL as string;
   const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY as string;

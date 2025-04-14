@@ -1,18 +1,37 @@
-import { NextRequest, NextResponse } from "next/server";
-import { generateCsrfToken } from "@/lib/csrf-server";
+import { NextResponse } from "next/server";
+import { generateCsrfToken } from "@/lib/server/csrf-server";
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
-    // Generar un nuevo token CSRF
+    // Generar un nuevo token CSRF con el método centralizado
     const token = await generateCsrfToken();
 
-    // Devolver el token en la respuesta
-    return NextResponse.json({ token });
+    // Agregar encabezados para evitar el almacenamiento en caché
+    return new NextResponse(JSON.stringify({ token, timestamp: Date.now() }), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control":
+          "no-store, no-cache, must-revalidate, proxy-revalidate",
+        Pragma: "no-cache",
+        Expires: "0",
+        "X-CSRF-Token-Debug": "generated", // Header de depuración
+      },
+    });
   } catch (error) {
-    console.error("Error al generar token CSRF:", error);
-    return NextResponse.json(
-      { error: "Error al generar token CSRF" },
-      { status: 500 }
+    console.error("[API] Error generating CSRF token:", error);
+    return new NextResponse(
+      JSON.stringify({
+        error: "Failed to generate CSRF token",
+        errorCode: "CSRF_GEN_FAILED",
+        timestamp: Date.now(),
+      }),
+      {
+        status: 500,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      }
     );
   }
 }

@@ -1,4 +1,4 @@
-import { getSupabaseServer } from "@/lib/supabase/server";
+import { getSupabaseClient } from "@/lib/supabase/client";
 
 // Tipos para la actividad sospechosa
 export interface SuspiciousActivity {
@@ -31,7 +31,7 @@ export async function logSuspiciousActivity(
   userAgent: string,
   details?: Record<string, any>
 ) {
-  const supabase = await getSupabaseServer();
+  const supabase = getSupabaseClient();
 
   try {
     // Obtener información de geolocalización basada en IP
@@ -68,7 +68,7 @@ export async function logSuspiciousActivity(
 
 // Función para bloquear temporalmente una cuenta
 async function lockAccount(userId: string, durationMinutes = 30) {
-  const supabase = await getSupabaseServer();
+  const supabase = getSupabaseClient();
 
   try {
     // Actualizar el estado de la cuenta en la base de datos
@@ -99,7 +99,7 @@ async function lockAccount(userId: string, durationMinutes = 30) {
 
 // Función para verificar si una cuenta está bloqueada
 export async function isAccountLocked(userId: string): Promise<boolean> {
-  const supabase = await getSupabaseServer();
+  const supabase = getSupabaseClient();
 
   try {
     const { data, error } = await supabase
@@ -163,7 +163,7 @@ export async function isIpSuspicious(
   ipAddress: string,
   userId: string
 ): Promise<boolean> {
-  const supabase = await getSupabaseServer();
+  const supabase = getSupabaseClient();
 
   try {
     // Obtener el historial de IPs del usuario
@@ -209,7 +209,7 @@ export async function detectBruteForce(
   userId: string,
   ipAddress: string
 ): Promise<boolean> {
-  const supabase = await getSupabaseServer();
+  const supabase = getSupabaseClient();
 
   try {
     // Obtener intentos fallidos recientes desde la misma IP

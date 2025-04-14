@@ -18,6 +18,9 @@ export interface Database {
           updated_at: string;
           last_login: string | null;
           login_attempts: number;
+          email: string;
+          two_factor_enabled: boolean;
+          account_locked: boolean;
         };
         Insert: {
           id: string;
@@ -27,6 +30,9 @@ export interface Database {
           updated_at?: string;
           last_login?: string | null;
           login_attempts?: number;
+          email: string;
+          two_factor_enabled?: boolean;
+          account_locked?: boolean;
         };
         Update: {
           id?: string;
@@ -36,6 +42,9 @@ export interface Database {
           updated_at?: string;
           last_login?: string | null;
           login_attempts?: number;
+          email?: string;
+          two_factor_enabled?: boolean;
+          account_locked?: boolean;
         };
       };
       murals: {
