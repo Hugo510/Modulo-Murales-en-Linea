@@ -18,6 +18,8 @@ import { TwoFactorAuth } from "@/components/two-factor-auth"
 import { useCsrfToken } from "@/lib/csrf"
 import { validateForm, loginSchema } from "@/lib/validation"
 import { detectBruteForce, isIpSuspicious } from "@/lib/security"
+import { logAuth } from "@/lib/auth-logger"
+import { redirectAfterLogin } from "@/lib/auth-redirect"
 
 export default function LoginPage() {
   const { login, isAuthenticated, isLoading, checkSuspiciousActivity } = useAuth()
@@ -70,12 +72,26 @@ export default function LoginPage() {
     fetchCsrfToken()
   }, [getCsrfToken])
 
-  // Redirigir si ya está autenticado
+  // Mejorar la redirección si ya está autenticado
   useEffect(() => {
+    // Solo redirigir si ya está autenticado y no está cargando
     if (isAuthenticated && !isLoading) {
-      router.push(from)
+      console.log("Usuario autenticado, redirigiendo a:", from);
+      router.push(from);
     }
-  }, [isAuthenticated, isLoading, router, from])
+  }, [isAuthenticated, isLoading, router, from]);
+
+  // Mostrar mensaje de error si hubo problema con la autenticación
+  useEffect(() => {
+    const authError = searchParams.get("auth_error");
+    if (authError === "true") {
+      setError("Se produjo un error al verificar tu sesión. Por favor, intenta iniciar sesión nuevamente.");
+      // Limpiar cualquier estado pendiente
+      localStorage.removeItem("login_success");
+      localStorage.removeItem("auth_user_id");
+      localStorage.removeItem("auth_redirect");
+    }
+  }, [searchParams]);
 
   // Verificar si se debe mostrar captcha basado en intentos previos
   useEffect(() => {
@@ -104,9 +120,9 @@ export default function LoginPage() {
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError("")
-    setFormErrors({})
+    e.preventDefault();
+    setError("");
+    setFormErrors({});
 
     // Validar formulario
     const formData = { email, password }
@@ -129,9 +145,21 @@ export default function LoginPage() {
       return
     }
 
-    setIsSubmitting(true)
+    setIsSubmitting(true);
 
     try {
+      // Registrar intento de login en el cliente
+      logAuth({
+        action: "auth_attempt",
+        email: email,
+        info: "Intento de inicio de sesión desde formulario",
+        level: "info",
+        metadata: {
+          recaptchaPresent: !!recaptchaToken,
+          from: from
+        }
+      });
+
       // Verificar si hay intentos de fuerza bruta
       const ipAddress = await getCurrentIp()
       const isBruteForce = await detectBruteForce("unknown", ipAddress)
@@ -174,7 +202,17 @@ export default function LoginPage() {
         } else if (loginAttempts + 1 >= 5) {
           setError("Demasiados intentos fallidos. Tu cuenta ha sido bloqueada temporalmente.");
         } else {
-          setError(errorData?.error || "Correo electrónico o contraseña incorrectos");
+          // Mostrar mensaje más específico basado en código de error
+          let errorMessage = errorData?.error || "Correo electrónico o contraseña incorrectos";
+
+          if (errorData?.code === "ACCOUNT_LOCKED") {
+            errorMessage = "Tu cuenta ha sido bloqueada temporalmente por motivos de seguridad";
+          } else if (errorData?.code === "RATE_LIMITED") {
+            errorMessage = "Has excedido el límite de intentos. Inténtalo de nuevo más tarde.";
+          }
+
+          console.error("Error de inicio de sesión:", errorData);
+          setError(errorMessage);
         }
 
         setIsSubmitting(false);
@@ -182,6 +220,9 @@ export default function LoginPage() {
       }
 
       const loginData = await loginResponse.json();
+
+      // Mensaje de log para diagnóstico
+      console.log("Login exitoso en API, respuesta:", loginData);
 
       // Verificar si se requiere 2FA
       if (loginData.requires2FA) {
@@ -191,33 +232,64 @@ export default function LoginPage() {
         return
       }
 
-      // Verificar actividad sospechosa
-      const isSuspicious = await isIpSuspicious(ipAddress, loginData.userId)
+      // SOLUCIÓN ULTRA-SIMPLIFICADA: Sin interferencias y redirección directa
+      try {
+        // Limpiar cualquier redirección anterior
+        localStorage.removeItem("auth_redirect");
+        sessionStorage.removeItem("redirection_in_progress");
+        sessionStorage.removeItem("auth_redirect_in_progress");
 
-      if (isSuspicious) {
-        // Obtener información de ubicación
-        const locationInfo = await getLocationInfo(ipAddress)
+        // Guardar información básica del usuario - CRÍTICO PARA LA REDIRECCIÓN
+        localStorage.setItem("auth_user_id", loginData.userId);
+        localStorage.setItem("login_success", "true");
+        localStorage.setItem("login_timestamp", Date.now().toString());
 
-        setShowSecurity(true)
-        setSecurityInfo({
-          ip: ipAddress,
-          location: `${locationInfo.city}, ${locationInfo.country}`,
-        })
-      } else {
-        // Completar inicio de sesión
-        const success = await login(email, password)
-
-        if (success) {
-          router.push(from)
-        } else {
-          setError("Error al iniciar sesión. Por favor, inténtalo de nuevo.")
+        // Guardar información completa del usuario
+        if (loginData.user) {
+          localStorage.setItem("auth_user_name", loginData.user.name || "");
+          localStorage.setItem("auth_user_email", loginData.user.email || "");
+          localStorage.setItem("auth_user_role", loginData.user.role || "user");
         }
+
+        // Registrar acción
+        console.log(`Login exitoso, preparando redirección ultra-simplificada a ${from}`);
+        logAuth({
+          action: "auth_success",
+          email: email,
+          info: "Redirección ultra-simplificada post-login iniciada",
+          level: "info",
+          metadata: { destination: from, userId: loginData.userId }
+        });
+
+        // Iniciar login en contexto pero SIN ESPERAR la respuesta
+        login(email, password);
+
+        // REDIRECCIÓN SIMPLE Y DIRECTA después de un breve retraso
+        setTimeout(() => {
+          redirectAfterLogin(from);
+        }, 200);
+
+        return true;
+      } catch (redirectError) {
+        console.error("Error durante el proceso de redirección:", redirectError);
+        setError("Error al iniciar sesión. Por favor, inténtalo de nuevo.");
+        return false;
       }
     } catch (error) {
-      console.error("Error al iniciar sesión:", error)
-      setError("Ocurrió un error inesperado. Por favor, inténtalo de nuevo más tarde.")
+      console.error("Error al iniciar sesión:", error);
+
+      // Registrar el error no controlado
+      logAuth({
+        action: "auth_unhandled_error",
+        email: email,
+        info: "Error no controlado en cliente durante login",
+        level: "error",
+        error
+      });
+
+      setError("Ocurrió un error inesperado. Por favor, inténtalo de nuevo más tarde.");
     } finally {
-      setIsSubmitting(false)
+      setIsSubmitting(false);
     }
   }
 
@@ -253,7 +325,13 @@ export default function LoginPage() {
     const success = await login(email, password)
 
     if (success) {
-      router.push(from)
+      console.log("Login exitoso desde security confirm, redirigiendo a:", from);
+
+      // Dar tiempo para que el estado de autenticación se actualice
+      setTimeout(() => {
+        // Usar window.location para una redirección forzada
+        window.location.href = from;
+      }, 500);
     } else {
       setError("Error al iniciar sesión")
     }

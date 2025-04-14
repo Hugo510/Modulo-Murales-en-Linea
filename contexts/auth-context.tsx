@@ -1,748 +1,481 @@
 "use client"
 
-import type React from "react"
-import { createContext, useContext, useState, useEffect } from "react"
-import { useRouter } from "next/navigation"
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { getSupabaseClient } from "@/lib/supabase/client"
-import type { Session as SupabaseSession, User as SupabaseUser } from "@supabase/supabase-js"
-import { getCurrentDeviceInfo } from "@/services/session-service"
+import { useRouter } from "next/navigation"
+import { logAuth } from "@/lib/auth-logger"
+import { isRedirectionInProgress, clearRedirectionState } from "@/lib/auth-redirect"
 
-// Definir tipos para los usuarios
-export interface User {
+// Definir el tipo para el usuario
+interface User {
   id: string
   name: string
   email: string
-  avatar?: string
-  role: "admin" | "user"
-  createdAt: Date
-  lastLogin?: Date
-  loginAttempts?: number
-  securityInfo?: {
-    lastFailedLogin?: Date
-    lastIp?: string
-    lastLocation?: string
-    suspiciousActivities?: Array<{
-      date: Date
-      activity: string
-      ip: string
-      location: string
-    }>
-  }
-  sessionSettings?: {
-    maxSessions: number
-    autoLogoutMinutes: number
-    notifyNewSessions: boolean
-    restrictSameDeviceType: boolean
-    defaultPermissions: {
-      canEdit: boolean
-      canDelete: boolean
-      canShare: boolean
-      canExport: boolean
-    }
-  }
+  role: string
 }
 
-// Definición de tipos para las sesiones
-export interface Session {
-  id: string
-  userId: string
-  deviceInfo: {
-    type: string
-    name: string
-    browser: string
-    os: string
-  }
-  location: {
-    city: string
-    country: string
-  }
-  ip: string
-  lastActive: Date
-  createdAt: Date
-  isCurrentSession: boolean
-  status?: "active" | "idle" | "expired"
-  expiresAt?: Date
-  lastNotified?: Date
-  permissions?: {
-    canEdit: boolean
-    canDelete: boolean
-    canShare: boolean
-    canExport: boolean
-  }
-}
-
-// Definir el contexto de autenticación
+// Definir el tipo para el contexto de autenticación
 interface AuthContextType {
   user: User | null
-  isLoading: boolean
   isAuthenticated: boolean
+  isLoading: boolean
   login: (email: string, password: string) => Promise<boolean>
   register: (name: string, email: string, password: string) => Promise<boolean>
-  logout: (allSessions?: boolean) => Promise<void>
-  updateUser: (userData: Partial<User>) => Promise<boolean>
-  sessions: Session[]
-  currentSession: Session | null
-  closeUserSession: (sessionId: string) => Promise<void>
-  closeAllUserSessions: () => Promise<void>
-  refreshSessions: () => Promise<void>
-  checkSuspiciousActivity: (ip: string, location: string) => boolean
-  resetLoginAttempts: () => Promise<void>
-  updateSessionPermissions: (sessionId: string, permissions: Partial<Session["permissions"]>) => Promise<void>
-  extendSession: (sessionId: string, hours?: number) => Promise<void>
-  updateSessionSettings: (settings: Partial<User["sessionSettings"]>) => Promise<boolean>
-  checkSessionConflicts: () => Promise<boolean>
+  logout: () => Promise<void>
+  checkSuspiciousActivity: (userId: string) => Promise<boolean>
 }
 
-// Crear el contexto
-const AuthContext = createContext<AuthContextType | undefined>(undefined)
+// Crear el contexto con un valor predeterminado
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  isAuthenticated: false,
+  isLoading: true,
+  login: async () => false,
+  register: async () => false,
+  logout: async () => { },
+  checkSuspiciousActivity: async () => false,
+})
 
-// Proveedor del contexto de autenticación
+// Hook personalizado para usar el contexto de autenticación
+export const useAuth = () => useContext(AuthContext)
+
+// Proveedor de autenticación
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
-  const [sessions, setSessions] = useState<Session[]>([])
-  const [currentSession, setCurrentSession] = useState<Session | null>(null)
-  const [supabaseSession, setSupabaseSession] = useState<SupabaseSession | null>(null)
+  const [authReady, setAuthReady] = useState(false)
   const router = useRouter()
-  const supabase = getSupabaseClient()
+  const authTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const authAttempts = useRef(0)
 
-  // Comprobar si hay un usuario autenticado al cargar
-  useEffect(() => {
-    const checkSession = async () => {
-      try {
-        // Obtener la sesión actual
-        const {
-          data: { session },
-          error,
-        } = await supabase.auth.getSession()
+  // Mejora para manejar errores de red en obtención de usuario
+  const getCurrentUser = useCallback(async () => {
+    try {
+      console.log("[Auth] Obteniendo usuario actual...");
+      authAttempts.current += 1;
 
-        if (error) {
-          console.error("Error al obtener la sesión:", error)
-          setIsLoading(false)
-          return
+      // Si hemos intentado demasiadas veces, dejar de intentar
+      if (authAttempts.current > 3) {
+        console.warn("[Auth] Demasiados intentos de autenticación, finalizando proceso.");
+
+        // Verificar si hay un indicador de login reciente en localStorage
+        const loginSuccess = localStorage.getItem("login_success");
+        const userId = localStorage.getItem("auth_user_id");
+        const timestamp = localStorage.getItem("login_timestamp");
+        const isRecent = timestamp && (Date.now() - parseInt(timestamp)) < 60000; // 60 segundos
+
+        if (loginSuccess === "true" && userId && isRecent) {
+          console.log("[Auth] Detectado login reciente a pesar del fallo de red, permitiendo acceso provisional");
+          // Permitimos acceso con datos mínimos basados en localStorage
+          const provisionalUser = {
+            id: userId,
+            name: localStorage.getItem("auth_user_name") || "Usuario",
+            email: localStorage.getItem("auth_user_email") || "",
+            role: localStorage.getItem("auth_user_role") || "user"
+          };
+
+          setUser(provisionalUser);
+          setIsAuthenticated(true);
+        } else {
+          setUser(null);
+          setIsAuthenticated(false);
         }
 
-        if (session) {
-          setSupabaseSession(session)
-          await loadUserProfile(session.user)
-        } else {
-          setUser(null)
+        setIsLoading(false);
+        setAuthReady(true);
+        return null;
+      }
+
+      const supabase = getSupabaseClient();
+
+      console.log("[Auth] Solicitando sesión a Supabase...");
+
+      const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+
+      if (sessionError) {
+        console.error("[Auth] Error de sesión:", sessionError);
+        throw sessionError;
+      }
+
+      if (!sessionData.session) {
+        console.log("[Auth] No hay sesión activa");
+        setUser(null);
+        setIsAuthenticated(false);
+        setIsLoading(false);
+        setAuthReady(true);
+        return null;
+      }
+
+      console.log("[Auth] Sesión encontrada, obteniendo datos de usuario...");
+
+      setIsAuthenticated(true);
+      setIsLoading(false);
+      setAuthReady(true);
+
+      const { data: userData, error: userError } = await supabase.auth.getUser();
+
+      if (userError || !userData.user) {
+        console.error("[Auth] Error al obtener usuario:", userError);
+        throw userError || new Error("No se pudo obtener el usuario");
+      }
+
+      const userInfo: User = {
+        id: userData.user.id,
+        name: userData.user.user_metadata?.name || "Usuario",
+        email: userData.user.email || "",
+        role: userData.user.user_metadata?.role || "user",
+      };
+
+      console.log("[Auth] Usuario autenticado:", userInfo.name, "con ID:", userInfo.id);
+
+      setUser(userInfo);
+
+      return userInfo;
+    } catch (error) {
+      console.error("[Auth] Error al obtener usuario actual:", error);
+
+      // En caso de error de red específicamente, verificar login_success
+      if (error instanceof Error &&
+        (error.message.includes("Failed to fetch") ||
+          error.name.includes("AuthRetryableFetchError"))) {
+
+        console.log("[Auth] Error de red detectado, verificando login reciente en localStorage");
+        const loginSuccess = localStorage.getItem("login_success");
+        const userId = localStorage.getItem("auth_user_id");
+        const timestamp = localStorage.getItem("login_timestamp");
+        const isRecent = timestamp && (Date.now() - parseInt(timestamp)) < 60000; // 60 segundos
+
+        if (loginSuccess === "true" && userId && isRecent) {
+          console.log("[Auth] Usando datos de localStorage para autenticación provisional");
+          // Permitir autenticación basada en localStorage
+          const provisionalUser = {
+            id: userId,
+            name: localStorage.getItem("auth_user_name") || "Usuario",
+            email: localStorage.getItem("auth_user_email") || "",
+            role: localStorage.getItem("auth_user_role") || "user"
+          };
+
+          setUser(provisionalUser);
+          setIsAuthenticated(true);
+          setIsLoading(false);
+          setAuthReady(true);
+
+          // Programar un reintento después de un tiempo
+          setTimeout(() => {
+            console.log("[Auth] Reintentando obtención de usuario después de error de red");
+            // Reintentar obtener el usuario completo
+            authAttempts.current = 0; // Reset contador para permitir nuevos intentos
+            getCurrentUser();
+          }, 2000);
+
+          return provisionalUser;
+        }
+      }
+
+      setUser(null);
+      setIsAuthenticated(false);
+      setIsLoading(false);
+      setAuthReady(true);
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    authTimeoutRef.current = setTimeout(() => {
+      if (isLoading) {
+        console.warn("Timeout de autenticación alcanzado, finalizando estado de carga.");
+        setIsLoading(false);
+        setAuthReady(true);
+      }
+    }, 10000);
+
+    const checkAuth = async () => {
+      try {
+        console.log("Realizando verificación inicial de autenticación...");
+        if (isMounted) {
+          await getCurrentUser();
         }
       } catch (error) {
-        console.error("Error al verificar la autenticación:", error)
-      } finally {
-        setIsLoading(false)
+        console.error("Error en verificación inicial:", error);
+        if (isMounted) {
+          setIsLoading(false);
+          setAuthReady(true);
+        }
       }
     }
 
-    checkSession()
+    checkAuth();
 
-    // Suscribirse a cambios en la autenticación
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === "SIGNED_IN" && session) {
-        setSupabaseSession(session)
-        await loadUserProfile(session.user)
+    const supabase = getSupabaseClient();
+
+    console.log("Configurando suscripción a eventos de autenticación...");
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      console.log("Evento de autenticación recibido:", event);
+
+      if (!isMounted) return;
+
+      authAttempts.current = 0;
+
+      if (event === "SIGNED_IN") {
+        console.log("Usuario ha iniciado sesión, actualizando estado...");
+        try {
+          await getCurrentUser();
+          console.log("Estado de autenticación actualizado después de SIGNED_IN:", {
+            isAuthenticated,
+            isLoading: false
+          });
+        } catch (error) {
+          console.error("Error al procesar evento SIGNED_IN:", error);
+        }
+      } else if (event === "TOKEN_REFRESHED") {
+        console.log("Token actualizado, refrescando datos de usuario...");
+        await getCurrentUser();
       } else if (event === "SIGNED_OUT") {
-        setUser(null)
-        setSupabaseSession(null)
-        setSessions([])
-        setCurrentSession(null)
+        console.log("Usuario ha cerrado sesión");
+        setUser(null);
+        setIsAuthenticated(false);
+        setIsLoading(false);
+      } else if (event === "USER_UPDATED") {
+        console.log("Información de usuario actualizada");
+        await getCurrentUser();
       }
-    })
+    });
 
     return () => {
-      subscription.unsubscribe()
-    }
-  }, [])
+      isMounted = false;
 
-  // Cargar el perfil del usuario desde la base de datos
-  const loadUserProfile = async (supabaseUser: SupabaseUser) => {
+      if (authTimeoutRef.current) {
+        clearTimeout(authTimeoutRef.current);
+      }
+
+      subscription.unsubscribe();
+      console.log("Limpieza: suscripción a eventos de autenticación cancelada");
+    }
+  }, [getCurrentUser]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // Si hay una redirección en curso, no interfiera con ella
+    if (isRedirectionInProgress()) {
+      console.log("[Auth] Redirección especializada en curso, evitando interferencias");
+      return;
+    }
+
+    // Solo limpiar datos de redirección si el usuario está autenticado
+    if (isAuthenticated && user) {
+      console.log("[Auth] Usuario autenticado, limpiando indicadores de redirección");
+
+      // Limpiar todos los indicadores de redirección
+      clearRedirectionState();
+
+      // Conservar información de usuario pero limpiar flags de login exitoso
+      if (localStorage.getItem("login_success") === "true") {
+        console.log("[Auth] Usuario ya autenticado, limpiando flags de login_success");
+        localStorage.removeItem("login_success");
+        localStorage.removeItem("login_timestamp");
+      }
+    }
+  }, [isAuthenticated, user]);
+
+  const login = async (email: string, password: string) => {
+    console.log("[Auth] Iniciando proceso de login para:", email);
+    const loginStart = performance.now();
+
     try {
-      // Obtener el perfil del usuario
-      const { data: profile, error } = await supabase.from("profiles").select("*").eq("id", supabaseUser.id).single()
+      const supabase = getSupabaseClient();
 
-      if (error) {
-        console.error("Error al cargar el perfil:", error)
-        return
-      }
+      logAuth({
+        action: "auth_attempt",
+        email,
+        info: "Inicio de intento de autenticación",
+        level: "info"
+      });
 
-      if (profile) {
-        // Convertir el perfil a nuestro formato de usuario
-        const userData: User = {
-          id: profile.id,
-          name: profile.name,
-          email: supabaseUser.email || "",
-          avatar: profile.avatar_url || undefined,
-          role: "user", // Por defecto todos son usuarios normales
-          createdAt: new Date(profile.created_at),
-          lastLogin: profile.last_login ? new Date(profile.last_login) : undefined,
-          loginAttempts: profile.login_attempts || 0,
-          sessionSettings: {
-            maxSessions: 5,
-            autoLogoutMinutes: 30,
-            notifyNewSessions: true,
-            restrictSameDeviceType: false,
-            defaultPermissions: {
-              canEdit: true,
-              canDelete: true,
-              canShare: true,
-              canExport: true,
-            },
-          },
-        }
-
-        setUser(userData)
-
-        // Cargar sesiones
-        await loadSessions(userData.id)
-
-        // Actualizar última conexión
-        await supabase
-          .from("profiles")
-          .update({
-            last_login: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", userData.id)
-      } else {
-        // Si no existe el perfil, crearlo
-        const newProfile = {
-          id: supabaseUser.id,
-          name: supabaseUser.user_metadata?.name || supabaseUser.email?.split("@")[0] || "Usuario",
-          avatar_url: supabaseUser.user_metadata?.avatar_url || null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          last_login: new Date().toISOString(),
-          login_attempts: 0,
-        }
-
-        const { error: insertError } = await supabase.from("profiles").insert([newProfile])
-
-        if (insertError) {
-          console.error("Error al crear el perfil:", insertError)
-          return
-        }
-
-        // Crear usuario con el nuevo perfil
-        const userData: User = {
-          id: newProfile.id,
-          name: newProfile.name,
-          email: supabaseUser.email || "",
-          avatar: newProfile.avatar_url || undefined,
-          role: "user",
-          createdAt: new Date(newProfile.created_at),
-          lastLogin: new Date(newProfile.last_login),
-          loginAttempts: 0,
-          sessionSettings: {
-            maxSessions: 5,
-            autoLogoutMinutes: 30,
-            notifyNewSessions: true,
-            restrictSameDeviceType: false,
-            defaultPermissions: {
-              canEdit: true,
-              canDelete: true,
-              canShare: true,
-              canExport: true,
-            },
-          },
-        }
-
-        setUser(userData)
-      }
-    } catch (error) {
-      console.error("Error al procesar el perfil:", error)
-    }
-  }
-
-  // Cargar sesiones del usuario
-  const loadSessions = async (userId: string) => {
-    try {
-      const { data: userSessions, error } = await supabase
-        .from("sessions")
-        .select("*")
-        .eq("user_id", userId)
-        .order("last_active", { ascending: false })
-
-      if (error) {
-        console.error("Error al cargar sesiones:", error)
-        return
-      }
-
-      // Crear la sesión actual si no existe
-      const deviceInfo = getCurrentDeviceInfo()
-      let currentSessionData = userSessions?.find(
-        (s) => s.browser === deviceInfo.browser && s.os === deviceInfo.os && s.device_type === deviceInfo.type,
-      )
-
-      if (!currentSessionData) {
-        // Crear una nueva sesión
-        const newSession = {
-          user_id: userId,
-          device_type: deviceInfo.type,
-          device_name: deviceInfo.name,
-          browser: deviceInfo.browser,
-          os: deviceInfo.os,
-          ip: "127.0.0.1", // En un entorno real, obtendríamos la IP real
-          city: "Desconocida",
-          country: "Desconocido",
-          last_active: new Date().toISOString(),
-          created_at: new Date().toISOString(),
-          status: "active",
-          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24 horas
-          permissions: JSON.stringify({
-            canEdit: true,
-            canDelete: true,
-            canShare: true,
-            canExport: true,
-          }),
-        }
-
-        const { data: insertedSession, error: insertError } = await supabase
-          .from("sessions")
-          .insert([newSession])
-          .select()
-          .single()
-
-        if (insertError) {
-          console.error("Error al crear sesión:", insertError)
-        } else if (insertedSession) {
-          currentSessionData = insertedSession
-          userSessions?.push(currentSessionData)
-        }
-      } else {
-        // Actualizar la última actividad
-        await supabase
-          .from("sessions")
-          .update({
-            last_active: new Date().toISOString(),
-            status: "active",
-          })
-          .eq("id", currentSessionData.id)
-      }
-
-      // Convertir las sesiones al formato de nuestra aplicación
-      const formattedSessions: Session[] = (userSessions || []).map((s) => ({
-        id: s.id,
-        userId: s.user_id,
-        deviceInfo: {
-          type: s.device_type,
-          name: s.device_name,
-          browser: s.browser || "Desconocido",
-          os: s.os || "Desconocido",
-        },
-        location: {
-          city: s.city || "Desconocida",
-          country: s.country || "Desconocido",
-        },
-        ip: s.ip || "0.0.0.0",
-        lastActive: new Date(s.last_active),
-        createdAt: new Date(s.created_at),
-        isCurrentSession: currentSessionData ? s.id === currentSessionData.id : false,
-        status: s.status || "active",
-        expiresAt: s.expires_at ? new Date(s.expires_at) : undefined,
-        permissions: s.permissions
-          ? JSON.parse(s.permissions)
-          : {
-              canEdit: true,
-              canDelete: true,
-              canShare: true,
-              canExport: true,
-            },
-      }))
-
-      setSessions(formattedSessions)
-
-      // Establecer la sesión actual
-      if (currentSessionData) {
-        const current = formattedSessions.find((s) => s.id === currentSessionData?.id) || null
-        setCurrentSession(current)
-      }
-    } catch (error) {
-      console.error("Error al procesar sesiones:", error)
-    }
-  }
-
-  // Refrescar la lista de sesiones
-  const refreshSessions = async () => {
-    if (user) {
-      await loadSessions(user.id)
-      return Promise.resolve()
-    }
-    return Promise.resolve()
-  }
-
-  // Función para iniciar sesión
-  const login = async (email: string, password: string): Promise<boolean> => {
-    setIsLoading(true)
-    try {
+      console.log("[Auth] Llamando a signInWithPassword...");
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,
-      })
+      });
+
+      const loginDuration = performance.now() - loginStart;
 
       if (error) {
-        console.error("Error de inicio de sesión:", error)
-        setIsLoading(false)
-        return false
+        const errorDetails = {
+          code: error.code || "unknown_error_code",
+          name: error.name,
+          status: error?.status || 0,
+          message: error.message,
+          duration: loginDuration,
+        };
+
+        console.error("[Auth] Error en login:", errorDetails);
+
+        logAuth({
+          action: "auth_error",
+          email,
+          error: errorDetails,
+          info: `Error al autenticar: ${error.message}`,
+          level: "error"
+        });
+
+        if (error.message?.includes("Invalid login credentials")) {
+          logAuth({
+            action: "invalid_credentials",
+            email,
+            info: "Intento con credenciales incorrectas",
+            level: "warn"
+          });
+        } else if (error.message?.includes("rate limit")) {
+          logAuth({
+            action: "rate_limited",
+            email,
+            info: "Límite de intentos excedido",
+            level: "warn"
+          });
+        }
+
+        return false;
       }
 
-      // El usuario se cargará automáticamente a través del evento onAuthStateChange
-      setIsLoading(false)
-      return true
-    } catch (error) {
-      console.error("Error de inicio de sesión:", error)
-      setIsLoading(false)
-      return false
-    }
-  }
+      console.log(`[Auth] Login exitoso, sesión creada en ${Math.round(loginDuration)}ms`);
 
-  // Función para registrar un nuevo usuario
-  const register = async (name: string, email: string, password: string): Promise<boolean> => {
+      logAuth({
+        action: "auth_success",
+        email,
+        info: `Autenticación exitosa. Duración: ${Math.round(loginDuration)}ms`,
+        level: "info",
+        metadata: {
+          userId: data.user?.id,
+          authProvider: "email",
+          sessionExpiry: data.session?.expires_at
+        }
+      });
+
+      try {
+        // Actualizar estado inmediatamente
+        const userInfo = {
+          id: data.user.id,
+          name: data.user.user_metadata?.name || "Usuario",
+          email: data.user.email || "",
+          role: data.user.user_metadata?.role || "user",
+        };
+
+        // No guardar flags de redirección aquí - sólo datos del usuario
+        localStorage.setItem("auth_user_id", userInfo.id);
+        localStorage.setItem("auth_user_name", userInfo.name);
+        localStorage.setItem("auth_user_email", userInfo.email);
+        localStorage.setItem("auth_user_role", userInfo.role);
+
+        setUser(userInfo);
+        setIsAuthenticated(true);
+        setIsLoading(false);
+
+        console.log("[Auth] Estado de autenticación actualizado correctamente:", {
+          user: userInfo.name,
+          authenticated: true
+        });
+
+        return true;
+      } catch (stateError) {
+        console.error("[Auth] Error al actualizar estado después del login:", stateError);
+        return false;
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error("[Auth] Error completo en login:", error);
+
+      logAuth({
+        action: "auth_unhandled_error",
+        email,
+        error,
+        info: `Error no controlado: ${errorMessage}`,
+        level: "error"
+      });
+
+      return false;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const register = async (name: string, email: string, password: string) => {
+    console.log("Iniciando proceso de registro para:", email);
     setIsLoading(true)
+
     try {
+      const supabase = getSupabaseClient()
+
+      console.log("Intentando registrar usuario...");
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: {
           data: {
             name,
-          },
-        },
+            role: "user"
+          }
+        }
       })
 
       if (error) {
-        console.error("Error de registro:", error)
-        setIsLoading(false)
-        return false
+        console.error("Error en registro:", error);
+        throw error
       }
 
-      // El usuario se cargará automáticamente a través del evento onAuthStateChange
-      setIsLoading(false)
-      return true
+      console.log("Registro exitoso, iniciando sesión automáticamente...");
+
+      return await login(email, password)
     } catch (error) {
-      console.error("Error de registro:", error)
-      setIsLoading(false)
+      console.error("Error completo en registro:", error)
       return false
+    } finally {
+      setIsLoading(false)
     }
   }
 
-  // Función para cerrar sesión
-  const logout = async (allSessions = false) => {
-    try {
-      if (allSessions) {
-        // Cerrar todas las sesiones
-        await closeAllUserSessions()
-      } else if (currentSession) {
-        // Cerrar solo la sesión actual
-        await closeUserSession(currentSession.id)
-      }
+  const logout = async () => {
+    console.log("Cerrando sesión...");
+    setIsLoading(true)
 
-      // Cerrar sesión en Supabase
+    try {
+      const supabase = getSupabaseClient()
       await supabase.auth.signOut()
 
       setUser(null)
-      setCurrentSession(null)
-      setSessions([])
-      router.push("/login")
+      setIsAuthenticated(false)
+
+      console.log("Sesión cerrada con éxito");
+      router.push('/login')
     } catch (error) {
       console.error("Error al cerrar sesión:", error)
-    }
-  }
-
-  // Función para cerrar una sesión específica
-  const closeUserSession = async (sessionId: string) => {
-    try {
-      // Si es la sesión actual, cerrar sesión completamente
-      if (currentSession && currentSession.id === sessionId) {
-        await logout(false)
-        return
-      }
-
-      // Eliminar la sesión de la base de datos
-      await supabase.from("sessions").delete().eq("id", sessionId)
-
-      // Actualizar la lista de sesiones
-      setSessions(sessions.filter((s) => s.id !== sessionId))
-    } catch (error) {
-      console.error("Error al cerrar sesión:", error)
-    }
-  }
-
-  // Función para cerrar todas las sesiones excepto la actual
-  const closeAllUserSessions = async () => {
-    if (!currentSession || !user) return
-
-    try {
-      // Eliminar todas las sesiones excepto la actual
-      await supabase.from("sessions").delete().neq("id", currentSession.id).eq("user_id", user.id)
-
-      // Mantener solo la sesión actual
-      setSessions([currentSession])
-    } catch (error) {
-      console.error("Error al cerrar todas las sesiones:", error)
-    }
-  }
-
-  // Función para actualizar datos del usuario
-  const updateUser = async (userData: Partial<User>): Promise<boolean> => {
-    setIsLoading(true)
-    try {
-      if (!user) {
-        setIsLoading(false)
-        return false
-      }
-
-      // Preparar datos para actualizar
-      const updates: any = {}
-
-      if (userData.name) updates.name = userData.name
-      if (userData.avatar) updates.avatar_url = userData.avatar
-      if (userData.sessionSettings) updates.session_settings = JSON.stringify(userData.sessionSettings)
-
-      // Actualizar en Supabase
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          ...updates,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", user.id)
-
-      if (error) {
-        console.error("Error al actualizar usuario:", error)
-        setIsLoading(false)
-        return false
-      }
-
-      // Actualizar estado local
-      setUser({ ...user, ...userData })
+    } finally {
       setIsLoading(false)
-      return true
-    } catch (error) {
-      console.error("Error al actualizar usuario:", error)
-      setIsLoading(false)
-      return false
     }
   }
 
-  // Función para actualizar los permisos de una sesión
-  const updateSessionPermissions = async (
-    sessionId: string,
-    permissions: Partial<Session["permissions"]>,
-  ): Promise<void> => {
-    try {
-      const session = sessions.find((s) => s.id === sessionId)
-      if (!session || !session.permissions) return
-
-      const updatedPermissions = {
-        ...session.permissions,
-        ...permissions,
-      }
-
-      // Actualizar en Supabase
-      await supabase
-        .from("sessions")
-        .update({
-          permissions: JSON.stringify(updatedPermissions),
-        })
-        .eq("id", sessionId)
-
-      // Actualizar estado local
-      setSessions(
-        sessions.map((s) => {
-          if (s.id === sessionId) {
-            return {
-              ...s,
-              permissions: updatedPermissions,
-            }
-          }
-          return s
-        }),
-      )
-    } catch (error) {
-      console.error("Error al actualizar permisos de sesión:", error)
-    }
-  }
-
-  // Función para extender la duración de una sesión
-  const extendSession = async (sessionId: string, hours = 24): Promise<void> => {
-    try {
-      const expiresAt = new Date()
-      expiresAt.setHours(expiresAt.getHours() + hours)
-
-      // Actualizar en Supabase
-      await supabase
-        .from("sessions")
-        .update({
-          expires_at: expiresAt.toISOString(),
-          status: "active",
-        })
-        .eq("id", sessionId)
-
-      // Actualizar estado local
-      setSessions(
-        sessions.map((s) => {
-          if (s.id === sessionId) {
-            return {
-              ...s,
-              expiresAt,
-              status: "active",
-            }
-          }
-          return s
-        }),
-      )
-    } catch (error) {
-      console.error("Error al extender sesión:", error)
-    }
-  }
-
-  // Función para actualizar la configuración de sesiones
-  const updateSessionSettings = async (settings: Partial<User["sessionSettings"]>): Promise<boolean> => {
-    if (!user || !user.sessionSettings) return false
-
-    try {
-      const updatedSettings = {
-        ...user.sessionSettings,
-        ...settings,
-      }
-
-      // Actualizar en Supabase
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          session_settings: JSON.stringify(updatedSettings),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", user.id)
-
-      if (error) {
-        console.error("Error al actualizar configuración de sesiones:", error)
-        return false
-      }
-
-      // Actualizar estado local
-      setUser({
-        ...user,
-        sessionSettings: updatedSettings,
-      })
-
-      return true
-    } catch (error) {
-      console.error("Error al actualizar configuración de sesiones:", error)
-      return false
-    }
-  }
-
-  // Función para verificar si hay conflictos entre sesiones
-  const checkSessionConflicts = async (): Promise<boolean> => {
-    if (!user || !user.sessionSettings || !user.sessionSettings.restrictSameDeviceType) {
-      return false
-    }
-
-    try {
-      // Obtener sesiones activas
-      const { data, error } = await supabase.from("sessions").select("*").eq("user_id", user.id).eq("status", "active")
-
-      if (error) {
-        console.error("Error al verificar conflictos de sesiones:", error)
-        return false
-      }
-
-      // Verificar si hay más de un dispositivo del mismo tipo
-      const deviceTypes = new Set<string>()
-      for (const session of data || []) {
-        if (deviceTypes.has(session.device_type)) {
-          return true // Hay un conflicto
-        }
-        deviceTypes.add(session.device_type)
-      }
-
-      return false
-    } catch (error) {
-      console.error("Error al verificar conflictos de sesiones:", error)
-      return false
-    }
-  }
-
-  // Función para verificar actividad sospechosa
-  const checkSuspiciousActivity = (ip: string, location: string): boolean => {
-    if (!user || !user.securityInfo) return false
-
-    // Verificar si la IP o ubicación son diferentes a las habituales
-    const isSuspicious = user.securityInfo.lastIp !== ip || user.securityInfo.lastLocation !== location
-
-    // En un sistema real, aquí implementaríamos lógica más sofisticada
-    // como verificar patrones de comportamiento, geolocalización, etc.
-
-    if (isSuspicious && user.securityInfo.suspiciousActivities) {
-      // Registrar la actividad sospechosa
-      const updatedSecurityInfo = {
-        ...user.securityInfo,
-        suspiciousActivities: [
-          ...user.securityInfo.suspiciousActivities,
-          {
-            date: new Date(),
-            activity: "Login desde ubicación desconocida",
-            ip,
-            location,
-          },
-        ],
-      }
-
-      // Actualizar el usuario
-      updateUser({
-        securityInfo: updatedSecurityInfo,
-      })
-    }
-
-    return isSuspicious
-  }
-
-  // Función para resetear los intentos de login
-  const resetLoginAttempts = async () => {
-    if (user) {
-      try {
-        await supabase.from("profiles").update({ login_attempts: 0 }).eq("id", user.id)
-
-        setUser({ ...user, loginAttempts: 0 })
-      } catch (error) {
-        console.error("Error al resetear intentos de login:", error)
-      }
-    }
+  const checkSuspiciousActivity = async (userId: string) => {
+    return false
   }
 
   const value = {
     user,
+    isAuthenticated,
     isLoading,
-    isAuthenticated: !!user,
     login,
     register,
     logout,
-    updateUser,
-    sessions,
-    currentSession,
-    closeUserSession,
-    closeAllUserSessions,
-    refreshSessions,
-    checkSuspiciousActivity,
-    resetLoginAttempts,
-    updateSessionPermissions,
-    extendSession,
-    updateSessionSettings,
-    checkSessionConflicts,
+    checkSuspiciousActivity
+  }
+
+  if (!authReady) {
+    return <div className="flex items-center justify-center min-h-screen">
+      <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-purple-500"></div>
+    </div>
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
-}
-
-// Hook personalizado para usar el contexto de autenticación
-export function useAuth() {
-  const context = useContext(AuthContext)
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider")
-  }
-  return context
 }

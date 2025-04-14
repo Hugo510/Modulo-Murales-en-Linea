@@ -50,11 +50,13 @@ export default function RegistroPage() {
     fetchCsrfToken()
   }, [getCsrfToken])
 
-  // Si el usuario ya está autenticado, redirigir a la página principal
-  if (isAuthenticated) {
-    router.push("/dashboard")
-    return null
-  }
+  // Mover la redirección a un useEffect en lugar de hacerlo durante el renderizado
+  useEffect(() => {
+    // Si el usuario ya está autenticado, redirigir a la página principal
+    if (isAuthenticated) {
+      router.push("/dashboard")
+    }
+  }, [isAuthenticated, router])
 
   const handleRecaptchaVerify = (token: string | null) => {
     setRecaptchaToken(token)

@@ -16,12 +16,13 @@ export function useCsrfToken() {
     Math.random().toString(36).substring(2, 10)
   );
 
-  // Función para obtener un token CSRF
+  // Función para obtener un token CSRF - optimizada
   const fetchCsrfToken = useCallback(
     async (force = false): Promise<string> => {
       if (isGlobalRequesting && !force) {
         console.log(`[CSRF:${requestId}] Esperando solicitud en curso...`);
-        // Esperar a que la solicitud actual termine
+
+        // Si hay una solicitud en curso, usar un tiempo de espera más corto
         return new Promise((resolve) => {
           const checkInterval = setInterval(() => {
             if (!isGlobalRequesting && globalCsrfToken) {
@@ -30,16 +31,24 @@ export function useCsrfToken() {
             }
           }, 100);
 
-          // Añadir timeout para evitar esperas indefinidas
+          // Reducir el timeout a 1 segundo
           setTimeout(() => {
             clearInterval(checkInterval);
+
+            // Si mientras tanto se resolvió el token global, usarlo
+            if (globalCsrfToken) {
+              resolve(globalCsrfToken);
+              return;
+            }
+
+            // Generar token de fallback
             const fallback =
               "timeout-token-" + Math.random().toString(36).substring(2);
             console.warn(
               `[CSRF:${requestId}] Timeout esperando token, usando fallback`
             );
             resolve(fallback);
-          }, 3000);
+          }, 1000);
         });
       }
 

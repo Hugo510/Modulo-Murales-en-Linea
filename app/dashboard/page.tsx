@@ -25,12 +25,17 @@ export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [isLoadingMurals, setIsLoadingMurals] = useState(true)
 
-  // Redirigir a login si no está autenticado
+  // Simplificar la lógica de redirección ya que ahora la maneja el layout
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      router.push("/login?from=/dashboard")
+    if (user) {
+      console.log("Usuario autenticado en dashboard:", user.name);
+
+      // Eliminar cualquier estado de redirección pendiente
+      localStorage.removeItem("auth_redirect");
+      localStorage.removeItem("auth_user_id");
+      localStorage.removeItem("login_success");
     }
-  }, [isAuthenticated, isLoading, router])
+  }, [user]);
 
   // Cargar murales cuando cambian los filtros o el usuario
   useEffect(() => {

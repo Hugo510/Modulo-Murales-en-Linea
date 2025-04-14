@@ -108,6 +108,7 @@ export async function POST(request: NextRequest) {
         {
           error:
             "Tu cuenta ha sido bloqueada temporalmente por motivos de seguridad",
+          code: "ACCOUNT_LOCKED",
         },
         { status: 403 }
       );
@@ -123,8 +124,23 @@ export async function POST(request: NextRequest) {
       // Registrar intento fallido
       await logLoginAttempt(email, false, request);
 
+      // Proporcionar códigos de error más descriptivos para el cliente
+      const errorCode = error.message?.includes("Invalid login credentials")
+        ? "INVALID_CREDENTIALS"
+        : error.message?.includes("rate limit")
+        ? "RATE_LIMITED"
+        : "AUTH_ERROR";
+
+      console.error(
+        `[${requestId}] Error de autenticación: ${error.message} (${errorCode})`
+      );
+
       return NextResponse.json(
-        { error: "Credenciales inválidas" },
+        {
+          error: "Credenciales inválidas",
+          code: errorCode,
+          message: error.message,
+        },
         { status: 401 }
       );
     }
@@ -132,7 +148,7 @@ export async function POST(request: NextRequest) {
     // Verificar si el usuario tiene 2FA habilitado
     const { data: profile } = await supabase
       .from("profiles")
-      .select("two_factor_enabled")
+      .select("two_factor_enabled, name, role")
       .eq("id", data.user.id)
       .single();
 
@@ -149,9 +165,19 @@ export async function POST(request: NextRequest) {
     // Registrar intento exitoso
     await logLoginAttempt(email, true, request);
 
+    // Incluir información adicional del usuario en la respuesta
     return NextResponse.json({
       success: true,
       userId: data.user.id,
+      user: {
+        id: data.user.id,
+        email: data.user.email,
+        name: profile?.name || data.user.user_metadata?.name || "Usuario",
+        role: profile?.role || data.user.user_metadata?.role || "user",
+      },
+      session: {
+        expiresAt: data.session?.expires_at,
+      },
     });
   } catch (error) {
     console.error(
