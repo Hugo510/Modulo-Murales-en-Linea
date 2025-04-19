@@ -2,15 +2,16 @@
 
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Switch } from "@/components/ui/switch"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Download, FileText, ImageIcon, Printer, LinkIcon, PresentationIcon, FileJson } from "lucide-react"
-import { toast } from "@/components/ui/use-toast"
+import { Card, CardContent } from "@/components/ui/card"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { FileImage, FilePdf, FileText, Download, Share2, ExternalLink } from "lucide-react"
+import { useToast } from "@/components/ui/use-toast"
 
 interface MuralExportOptionsProps {
   muralId: string
@@ -18,424 +19,215 @@ interface MuralExportOptionsProps {
 }
 
 export function MuralExportOptions({ muralId, muralTitle }: MuralExportOptionsProps) {
-  const [activeTab, setActiveTab] = useState("image")
-  const [exportOptions, setExportOptions] = useState({
-    format: "png",
-    quality: "high",
-    includeComments: true,
-    includeMetadata: true,
-    showCollaborators: true,
-    showTimestamps: true,
-    width: "1920",
-    height: "1080",
-    presentationMode: "auto",
-    slideTransition: "fade",
-    slideDuration: "5",
-  })
+  const { toast } = useToast()
+  const [isExporting, setIsExporting] = useState(false)
+  const [includeComments, setIncludeComments] = useState(true)
+  const [exportFormat, setExportFormat] = useState("pdf")
+  const [selectedItems, setSelectedItems] = useState<string[]>([])
+  const [exportQuality, setExportQuality] = useState("medium")
 
   const handleExport = () => {
-    // Aquí iría la lógica para exportar el mural
-    toast({
-      title: "Exportación iniciada",
-      description: `Exportando mural como ${activeTab === "image" ? exportOptions.format : activeTab}`,
-    })
+    setIsExporting(true)
 
-    // Simular finalización de exportación
+    // Simulación de exportación
     setTimeout(() => {
+      setIsExporting(false)
       toast({
-        title: "Exportación completada",
-        description: "El archivo ha sido descargado correctamente",
+        title: "Mural exportado",
+        description: `El mural "${muralTitle}" ha sido exportado correctamente`,
       })
     }, 2000)
   }
 
-  const handleOptionChange = (name: string, value: any) => {
-    setExportOptions((prev) => ({ ...prev, [name]: value }))
-  }
-
   return (
-    <Card className="w-full">
-      <CardHeader>
-        <CardTitle className="text-xl bg-clip-text text-transparent bg-gradient-to-r from-blue-500 to-purple-600">
-          Exportar y Presentar Mural
-        </CardTitle>
-        <CardDescription>Exporta tu mural en diferentes formatos o preséntalo en clase</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="image" className="data-[state=active]:bg-blue-50 data-[state=active]:text-blue-700">
-              Imagen
-            </TabsTrigger>
-            <TabsTrigger value="pdf" className="data-[state=active]:bg-red-50 data-[state=active]:text-red-700">
-              PDF
-            </TabsTrigger>
-            <TabsTrigger
-              value="presentation"
-              className="data-[state=active]:bg-green-50 data-[state=active]:text-green-700"
+    <div className="space-y-6">
+      <div>
+        <h3 className="font-medium mb-2 text-purple-700">Exportar Mural</h3>
+        <p className="text-sm text-muted-foreground">
+          Exporta tu mural en diferentes formatos para compartir o archivar.
+        </p>
+      </div>
+
+      <Tabs defaultValue="export" className="w-full">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="export" className="data-[state=active]:bg-purple-50 data-[state=active]:text-purple-700">
+            Exportar
+          </TabsTrigger>
+          <TabsTrigger value="share" className="data-[state=active]:bg-purple-50 data-[state=active]:text-purple-700">
+            Compartir
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="export" className="space-y-4 mt-4">
+          <div className="space-y-2">
+            <Label>Formato de exportación</Label>
+            <RadioGroup value={exportFormat} onValueChange={setExportFormat} className="grid grid-cols-2 gap-2">
+              <div className="flex items-center space-x-2">
+                <RadioGroupItem value="pdf" id="pdf" className="peer sr-only" />
+                <Label
+                  htmlFor="pdf"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md border-2 cursor-pointer hover:bg-muted peer-data-[state=checked]:border-purple-500 peer-data-[state=checked]:bg-purple-50"
+                >
+                  <FilePdf className="h-4 w-4 text-purple-500" />
+                  <span>PDF</span>
+                </Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <RadioGroupItem value="image" id="image" className="peer sr-only" />
+                <Label
+                  htmlFor="image"
+                  className="flex items-center gap-2 px-3 py-2 rounded-md border-2 cursor-pointer hover:bg-muted peer-data-[state=checked]:border-purple-500 peer-data-[state=checked]:bg-purple-50"
+                >
+                  <FileImage className="h-4 w-4 text-purple-500" />
+                  <span>Imagen PNG</span>
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+
+          <div className="space-y-2 pt-2">
+            <Label>Calidad de la exportación</Label>
+            <Select value={exportQuality} onValueChange={setExportQuality}>
+              <SelectTrigger className="focus-visible:ring-purple-500">
+                <SelectValue placeholder="Seleccionar calidad" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="low">Baja (más rápido)</SelectItem>
+                <SelectItem value="medium">Media (recomendado)</SelectItem>
+                <SelectItem value="high">Alta (más detalle)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-2 pt-2">
+            <Label>Opciones adicionales</Label>
+            <div className="space-y-2">
+              <div className="flex items-center space-x-2">
+                <Checkbox
+                  id="include-comments"
+                  checked={includeComments}
+                  onCheckedChange={(checked) => setIncludeComments(!!checked)}
+                />
+                <Label htmlFor="include-comments" className="text-sm font-normal">
+                  Incluir comentarios
+                </Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox id="include-metadata" defaultChecked />
+                <Label htmlFor="include-metadata" className="text-sm font-normal">
+                  Incluir metadatos (título, autor, fecha)
+                </Label>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Checkbox id="fit-content" defaultChecked />
+                <Label htmlFor="fit-content" className="text-sm font-normal">
+                  Ajustar al contenido
+                </Label>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4">
+            <Button
+              onClick={handleExport}
+              disabled={isExporting}
+              className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700"
             >
-              Presentación
-            </TabsTrigger>
-            <TabsTrigger value="data" className="data-[state=active]:bg-purple-50 data-[state=active]:text-purple-700">
-              Datos
-            </TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="image" className="space-y-4 mt-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="format">Formato de imagen</Label>
-                <Select value={exportOptions.format} onValueChange={(value) => handleOptionChange("format", value)}>
-                  <SelectTrigger className="border-2 focus-visible:ring-blue-500">
-                    <SelectValue placeholder="Selecciona un formato" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="png">PNG (con transparencia)</SelectItem>
-                    <SelectItem value="jpg">JPG (más pequeño)</SelectItem>
-                    <SelectItem value="webp">WebP (mejor calidad/tamaño)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="quality">Calidad</Label>
-                <Select value={exportOptions.quality} onValueChange={(value) => handleOptionChange("quality", value)}>
-                  <SelectTrigger className="border-2 focus-visible:ring-blue-500">
-                    <SelectValue placeholder="Selecciona la calidad" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">Baja (archivo pequeño)</SelectItem>
-                    <SelectItem value="medium">Media</SelectItem>
-                    <SelectItem value="high">Alta (mejor calidad)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="width">Ancho (px)</Label>
-                <Input
-                  id="width"
-                  type="number"
-                  value={exportOptions.width}
-                  onChange={(e) => handleOptionChange("width", e.target.value)}
-                  className="border-2 focus-visible:ring-blue-500"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="height">Alto (px)</Label>
-                <Input
-                  id="height"
-                  type="number"
-                  value={exportOptions.height}
-                  onChange={(e) => handleOptionChange("height", e.target.value)}
-                  className="border-2 focus-visible:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-4">
-              <h3 className="font-medium mb-2">Opciones adicionales</h3>
-              <div className="space-y-3">
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="includeComments"
-                    checked={exportOptions.includeComments}
-                    onCheckedChange={(checked) => handleOptionChange("includeComments", checked)}
-                  />
-                  <Label htmlFor="includeComments">Incluir comentarios</Label>
+              {isExporting ? (
+                <div className="flex items-center">
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Exportando...
                 </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="includeMetadata"
-                    checked={exportOptions.includeMetadata}
-                    onCheckedChange={(checked) => handleOptionChange("includeMetadata", checked)}
-                  />
-                  <Label htmlFor="includeMetadata">Incluir metadatos (título, descripción)</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="showCollaborators"
-                    checked={exportOptions.showCollaborators}
-                    onCheckedChange={(checked) => handleOptionChange("showCollaborators", checked)}
-                  />
-                  <Label htmlFor="showCollaborators">Mostrar colaboradores</Label>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 mt-4">
-              <div className="flex items-start gap-3">
-                <div className="bg-blue-100 p-2 rounded-full">
-                  <ImageIcon className="h-5 w-5 text-blue-600" />
-                </div>
-                <div>
-                  <h3 className="font-medium text-blue-800">Previsualización</h3>
-                  <p className="text-sm text-blue-700 mt-1">
-                    La imagen exportada tendrá un tamaño de {exportOptions.width}x{exportOptions.height} píxeles en
-                    formato {exportOptions.format.toUpperCase()}.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="pdf" className="space-y-4 mt-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="pdfQuality">Calidad</Label>
-                <Select value={exportOptions.quality} onValueChange={(value) => handleOptionChange("quality", value)}>
-                  <SelectTrigger className="border-2 focus-visible:ring-red-500">
-                    <SelectValue placeholder="Selecciona la calidad" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">Baja (archivo pequeño)</SelectItem>
-                    <SelectItem value="medium">Media</SelectItem>
-                    <SelectItem value="high">Alta (mejor calidad)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="pdfFormat">Formato de página</Label>
-                <Select defaultValue="a4">
-                  <SelectTrigger className="border-2 focus-visible:ring-red-500">
-                    <SelectValue placeholder="Selecciona un formato" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="a4">A4</SelectItem>
-                    <SelectItem value="letter">Carta</SelectItem>
-                    <SelectItem value="legal">Legal</SelectItem>
-                    <SelectItem value="tabloid">Tabloide</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-4">
-              <h3 className="font-medium mb-2">Opciones adicionales</h3>
-              <div className="space-y-3">
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="pdfIncludeComments"
-                    checked={exportOptions.includeComments}
-                    onCheckedChange={(checked) => handleOptionChange("includeComments", checked)}
-                  />
-                  <Label htmlFor="pdfIncludeComments">Incluir comentarios</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="pdfIncludeMetadata"
-                    checked={exportOptions.includeMetadata}
-                    onCheckedChange={(checked) => handleOptionChange("includeMetadata", checked)}
-                  />
-                  <Label htmlFor="pdfIncludeMetadata">Incluir metadatos (título, descripción)</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="pdfShowTimestamps"
-                    checked={exportOptions.showTimestamps}
-                    onCheckedChange={(checked) => handleOptionChange("showTimestamps", checked)}
-                  />
-                  <Label htmlFor="pdfShowTimestamps">Mostrar fechas de creación/modificación</Label>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-red-50 border border-red-100 rounded-lg p-4 mt-4">
-              <div className="flex items-start gap-3">
-                <div className="bg-red-100 p-2 rounded-full">
-                  <FileText className="h-5 w-5 text-red-600" />
-                </div>
-                <div>
-                  <h3 className="font-medium text-red-800">Información PDF</h3>
-                  <p className="text-sm text-red-700 mt-1">
-                    El PDF incluirá todos los elementos del mural y podrá ser impreso o compartido fácilmente.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </TabsContent>
-
-          <TabsContent value="presentation" className="space-y-4 mt-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="presentationMode">Modo de presentación</Label>
-                <Select
-                  value={exportOptions.presentationMode}
-                  onValueChange={(value) => handleOptionChange("presentationMode", value)}
-                >
-                  <SelectTrigger className="border-2 focus-visible:ring-green-500">
-                    <SelectValue placeholder="Selecciona un modo" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="auto">Automático (por tiempo)</SelectItem>
-                    <SelectItem value="manual">Manual (control de avance)</SelectItem>
-                    <SelectItem value="interactive">Interactivo (con enlaces)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="slideTransition">Transición entre diapositivas</Label>
-                <Select
-                  value={exportOptions.slideTransition}
-                  onValueChange={(value) => handleOptionChange("slideTransition", value)}
-                >
-                  <SelectTrigger className="border-2 focus-visible:ring-green-500">
-                    <SelectValue placeholder="Selecciona una transición" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="fade">Desvanecer</SelectItem>
-                    <SelectItem value="slide">Deslizar</SelectItem>
-                    <SelectItem value="zoom">Zoom</SelectItem>
-                    <SelectItem value="none">Ninguna</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {exportOptions.presentationMode === "auto" && (
-                <div className="space-y-2">
-                  <Label htmlFor="slideDuration">Duración por diapositiva (segundos)</Label>
-                  <Input
-                    id="slideDuration"
-                    type="number"
-                    value={exportOptions.slideDuration}
-                    onChange={(e) => handleOptionChange("slideDuration", e.target.value)}
-                    className="border-2 focus-visible:ring-green-500"
-                  />
-                </div>
+              ) : (
+                <>
+                  <Download className="h-4 w-4 mr-2" />
+                  Exportar mural
+                </>
               )}
-            </div>
+            </Button>
+          </div>
+        </TabsContent>
 
-            <div className="space-y-2 pt-4">
-              <h3 className="font-medium mb-2">Opciones de presentación</h3>
-              <div className="space-y-3">
+        <TabsContent value="share" className="space-y-4 mt-4">
+          <div className="space-y-2">
+            <Label>Opciones de compartir</Label>
+            <Card className="border-2 border-dashed p-4">
+              <CardContent className="p-0 space-y-4">
                 <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium">Modo pantalla completa</p>
-                    <p className="text-sm text-muted-foreground">Iniciar presentación en pantalla completa</p>
+                  <div className="flex items-center gap-2">
+                    <ExternalLink className="h-4 w-4 text-purple-500" />
+                    <span className="text-sm font-medium">Enlace público</span>
                   </div>
-                  <Switch defaultChecked={true} className="data-[state=checked]:bg-green-500" />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium">Mostrar controles de navegación</p>
-                    <p className="text-sm text-muted-foreground">Mostrar botones para avanzar/retroceder</p>
-                  </div>
-                  <Switch defaultChecked={true} className="data-[state=checked]:bg-green-500" />
+                  <Switch className="data-[state=checked]:bg-purple-500" />
                 </div>
 
                 <div className="flex items-center justify-between">
-                  <div>
-                    <p className="font-medium">Incluir índice</p>
-                    <p className="text-sm text-muted-foreground">Mostrar un índice de elementos al inicio</p>
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-4 w-4 text-purple-500" />
+                    <span className="text-sm font-medium">Permitir descargas</span>
                   </div>
-                  <Switch defaultChecked={true} className="data-[state=checked]:bg-green-500" />
+                  <Switch defaultChecked className="data-[state=checked]:bg-purple-500" />
                 </div>
-              </div>
-            </div>
+              </CardContent>
+            </Card>
+          </div>
 
-            <div className="bg-green-50 border border-green-100 rounded-lg p-4 mt-4">
-              <div className="flex items-start gap-3">
-                <div className="bg-green-100 p-2 rounded-full">
-                  <PresentationIcon className="h-5 w-5 text-green-600" />
-                </div>
-                <div>
-                  <h3 className="font-medium text-green-800">Presentación en clase</h3>
-                  <p className="text-sm text-green-700 mt-1">
-                    Puedes iniciar la presentación directamente o exportarla para usarla sin conexión.
-                  </p>
-                </div>
-              </div>
+          <div className="space-y-2">
+            <Label>Enlace público</Label>
+            <div className="flex gap-2">
+              <Input
+                value={`https://muralapp.example.com/share/${muralId}`}
+                readOnly
+                className="flex-1 bg-muted/50 border-2 focus-visible:ring-purple-500"
+              />
+              <Button variant="outline" className="flex-shrink-0" onClick={() => {
+                navigator.clipboard.writeText(`https://muralapp.example.com/share/${muralId}`);
+                toast({
+                  title: "Enlace copiado",
+                  description: "El enlace ha sido copiado al portapapeles",
+                });
+              }}>
+                Copiar
+              </Button>
             </div>
-          </TabsContent>
+            <p className="text-xs text-muted-foreground">
+              Este enlace permite a cualquiera ver el mural sin necesidad de iniciar sesión.
+            </p>
+          </div>
 
-          <TabsContent value="data" className="space-y-4 mt-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="dataFormat">Formato de datos</Label>
-                <Select defaultValue="json">
-                  <SelectTrigger className="border-2 focus-visible:ring-purple-500">
-                    <SelectValue placeholder="Selecciona un formato" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="json">JSON</SelectItem>
-                    <SelectItem value="csv">CSV</SelectItem>
-                    <SelectItem value="html">HTML</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="dataScope">Alcance de los datos</Label>
-                <Select defaultValue="complete">
-                  <SelectTrigger className="border-2 focus-visible:ring-purple-500">
-                    <SelectValue placeholder="Selecciona el alcance" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="complete">Completo (todos los datos)</SelectItem>
-                    <SelectItem value="content">Solo contenido</SelectItem>
-                    <SelectItem value="structure">Solo estructura</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+          <div className="space-y-2 pt-2">
+            <Label>Compartir en redes sociales</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="outline" className="flex items-center gap-2">
+                <span className="text-blue-600">f</span>
+                Facebook
+              </Button>
+              <Button variant="outline" className="flex items-center gap-2">
+                <span className="text-blue-400">t</span>
+                Twitter
+              </Button>
+              <Button variant="outline" className="flex items-center gap-2">
+                <span className="text-blue-700">in</span>
+                LinkedIn
+              </Button>
+              <Button variant="outline" className="flex items-center gap-2">
+                <span className="text-green-600">✉</span>
+                Email
+              </Button>
             </div>
+          </div>
 
-            <div className="space-y-2 pt-4">
-              <h3 className="font-medium mb-2">Opciones adicionales</h3>
-              <div className="space-y-3">
-                <div className="flex items-center space-x-2">
-                  <Checkbox defaultChecked />
-                  <Label>Incluir metadatos</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox defaultChecked />
-                  <Label>Incluir historial de cambios</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <Checkbox defaultChecked />
-                  <Label>Incluir información de colaboradores</Label>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-purple-50 border border-purple-100 rounded-lg p-4 mt-4">
-              <div className="flex items-start gap-3">
-                <div className="bg-purple-100 p-2 rounded-full">
-                  <FileJson className="h-5 w-5 text-purple-600" />
-                </div>
-                <div>
-                  <h3 className="font-medium text-purple-800">Exportación de datos</h3>
-                  <p className="text-sm text-purple-700 mt-1">
-                    Útil para análisis, respaldo o integración con otras herramientas educativas.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </TabsContent>
-        </Tabs>
-      </CardContent>
-      <CardFooter className="flex justify-between">
-        <div className="flex gap-2">
-          <Button variant="outline" className="flex items-center gap-2">
-            <Printer className="h-4 w-4" />
-            Imprimir
-          </Button>
-          <Button variant="outline" className="flex items-center gap-2">
-            <LinkIcon className="h-4 w-4" />
-            Compartir enlace
-          </Button>
-        </div>
-        <Button
-          onClick={handleExport}
-          className="bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700"
-        >
-          <Download className="h-4 w-4 mr-2" />
-          Exportar {activeTab === "image" ? exportOptions.format.toUpperCase() : activeTab.toUpperCase()}
-        </Button>
-      </CardFooter>
-    </Card>
+          <div className="pt-4">
+            <Button className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700">
+              <Share2 className="h-4 w-4 mr-2" />
+              Compartir mural
+            </Button>
+          </div>
+        </TabsContent>
+      </Tabs>
+    </div>
   )
 }

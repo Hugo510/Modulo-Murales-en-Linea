@@ -6,12 +6,123 @@ import { Laptop, Smartphone, Tablet, Monitor, MapPin, Clock, Shield } from "luci
 import { Button } from "@/components/ui/button"
 import Link from "next/link"
 import { motion } from "framer-motion"
-import { formatLastActive } from "@/services/session-service"
+import { formatLastActive, getCurrentDeviceInfo } from "@/services/session-service"
+import { useEffect, useState } from "react"
 
 export function SessionInfo() {
-  const { currentSession, isAuthenticated } = useAuth()
+  const { currentSession, isAuthenticated, user } = useAuth()
+  const [isLocalBypass, setIsLocalBypass] = useState(false)
+  const [localSession, setLocalSession] = useState<any>(null)
 
-  if (!isAuthenticated || !currentSession) {
+  // Función para obtener información del dispositivo actual de manera segura
+  const getSafeDeviceInfo = () => {
+    try {
+      if (typeof navigator !== 'undefined') {
+        const ua = navigator.userAgent.toLowerCase();
+        return {
+          type: /(android|webos|iphone|ipad|ipod|blackberry|windows phone)/i.test(ua)
+            ? (/ipad/i.test(ua) ? "Tablet" : "Mobile")
+            : "Desktop",
+          name: ua.includes('chrome')
+            ? "Chrome"
+            : (ua.includes('firefox')
+              ? "Firefox"
+              : (ua.includes('safari')
+                ? "Safari"
+                : "Navegador")),
+          os: ua.includes('windows')
+            ? "Windows"
+            : (ua.includes('mac')
+              ? "MacOS"
+              : (ua.includes('linux')
+                ? "Linux"
+                : (ua.includes('android')
+                  ? "Android"
+                  : (ua.includes('iphone') || ua.includes('ipad')
+                    ? "iOS"
+                    : "Desconocido"))))
+        };
+      }
+      return { type: "Desktop", name: "Navegador", os: "Desconocido" };
+    } catch (e) {
+      console.warn("Error obteniendo info de dispositivo:", e);
+      return { type: "Desktop", name: "Navegador", os: "Desconocido" };
+    }
+  };
+
+  // Cargamos información de sesión desde múltiples fuentes
+  useEffect(() => {
+    // Detectar bypass local
+    if (!isAuthenticated && typeof window !== 'undefined') {
+      const hasLoginSuccess = localStorage.getItem("login_success") === "true";
+      const userId = localStorage.getItem("auth_user_id");
+
+      if (hasLoginSuccess && userId) {
+        setIsLocalBypass(true);
+      }
+    }
+
+    // Intentar cargar información de sesión desde fallback
+    if (!currentSession && typeof window !== 'undefined') {
+      console.log("SessionInfo: Intentando cargar sesión desde localStorage o sessionStorage");
+      try {
+        // Buscar en múltiples ubicaciones
+        const fallbackSession = localStorage.getItem("fallback_session") ||
+          sessionStorage.getItem("fallback_session");
+
+        if (fallbackSession) {
+          console.log("SessionInfo: Encontrada información de sesión en storage local");
+          const parsedSession = JSON.parse(fallbackSession);
+          setLocalSession(parsedSession);
+        } else {
+          // Si no hay información guardada, generarla al vuelo
+          console.log("SessionInfo: Generando información de sesión local");
+          const deviceInfo = getSafeDeviceInfo();
+          const newSession = {
+            id: `local_${Date.now()}`,
+            deviceInfo: deviceInfo,
+            location: { city: "Tu ubicación", country: "Tu país" },
+            lastActive: new Date().toISOString()
+          };
+
+          // Guardar para uso futuro
+          localStorage.setItem("fallback_session", JSON.stringify(newSession));
+          setLocalSession(newSession);
+        }
+      } catch (e) {
+        console.warn("Error cargando/generando sesión:", e);
+        // En caso de error, crear una sesión mínima
+        setLocalSession({
+          deviceInfo: getSafeDeviceInfo(),
+          location: { city: "Ubicación local", country: "Tu país" },
+          lastActive: new Date().toISOString()
+        });
+      }
+    }
+  }, [currentSession, isAuthenticated]);
+
+  // Determinar qué info de sesión usar (currentSession, localSession, o datos generados)
+  const getSessionToUse = () => {
+    if (currentSession && currentSession.deviceInfo) {
+      return currentSession;
+    }
+
+    if (localSession) {
+      return localSession;
+    }
+
+    // Fallback final - generar datos sobre la marcha
+    return {
+      deviceInfo: getSafeDeviceInfo(),
+      location: { city: "Tu ubicación", country: "Tu país" },
+      lastActive: new Date().toISOString()
+    };
+  };
+
+  const sessionToUse = getSessionToUse();
+
+  // Si no hay autenticación ni bypass, mostrar mensaje estándar
+  if (!isAuthenticated && !isLocalBypass) {
     return (
       <Card className="border-2 hover:shadow-md transition-all">
         <CardHeader className="pb-2">
@@ -37,16 +148,18 @@ export function SessionInfo() {
 
   // Función para obtener el icono del dispositivo
   const getDeviceIcon = () => {
-    switch (currentSession.deviceInfo.type) {
-      case "Mobile":
-        return <Smartphone className="h-5 w-5 text-pink-500" />
-      case "Tablet":
-        return <Tablet className="h-5 w-5 text-purple-500" />
-      default:
-        return <Laptop className="h-5 w-5 text-blue-500" />
-    }
-  }
+    const deviceType = sessionToUse?.deviceInfo?.type?.toLowerCase() || "desktop";
 
+    if (deviceType.includes("mobile")) {
+      return <Smartphone className="h-5 w-5 text-pink-500" />;
+    } else if (deviceType.includes("tablet")) {
+      return <Tablet className="h-5 w-5 text-purple-500" />;
+    } else {
+      return <Laptop className="h-5 w-5 text-blue-500" />;
+    }
+  };
+
+  // Renderizar información de sesión con los datos disponibles
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
       <Card className="border-2 hover:shadow-md transition-all overflow-hidden">
@@ -55,7 +168,9 @@ export function SessionInfo() {
             {getDeviceIcon()}
             Sesión actual
           </CardTitle>
-          <CardDescription>Información sobre tu sesión actual</CardDescription>
+          <CardDescription>
+            {isAuthenticated ? "Información sobre tu sesión actual" : "Tu sesión actual en este dispositivo"}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm pt-4">
           <div className="flex items-center gap-2">
@@ -65,7 +180,8 @@ export function SessionInfo() {
             <div>
               <p className="font-medium">Dispositivo</p>
               <p className="text-muted-foreground">
-                {currentSession.deviceInfo.name} ({currentSession.deviceInfo.os})
+                {sessionToUse?.deviceInfo?.name || "Navegador"}
+                ({sessionToUse?.deviceInfo?.os || "Desconocido"})
               </p>
             </div>
           </div>
@@ -77,7 +193,8 @@ export function SessionInfo() {
             <div>
               <p className="font-medium">Ubicación</p>
               <p className="text-muted-foreground">
-                {currentSession.location.city}, {currentSession.location.country}
+                {sessionToUse?.location?.city || "Tu ubicación"},
+                {sessionToUse?.location?.country || "Tu país"}
               </p>
             </div>
           </div>
@@ -88,7 +205,11 @@ export function SessionInfo() {
             </div>
             <div>
               <p className="font-medium">Última actividad</p>
-              <p className="text-muted-foreground">{formatLastActive(new Date(currentSession.lastActive))}</p>
+              <p className="text-muted-foreground">
+                {sessionToUse?.lastActive
+                  ? formatLastActive(new Date(sessionToUse.lastActive))
+                  : "Ahora mismo"}
+              </p>
             </div>
           </div>
 

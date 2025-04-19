@@ -24,6 +24,19 @@ interface PermissionWithProfile {
   profiles: ProfileResult | null;
 }
 
+// Cache para minimizar solicitudes repetidas
+const muralCache = new Map<string, { data: Mural | null; timestamp: number }>();
+const CACHE_TTL = 60000; // 1 minuto en ms
+
+// Añadir una función de utilidad para comparación segura de IDs
+function safeIdComparison(
+  id1: string | null | undefined,
+  id2: string | null | undefined
+): boolean {
+  if (!id1 || !id2) return false;
+  return id1.toLowerCase() === id2.toLowerCase();
+}
+
 // Función para obtener perfil de usuario - mejora la modularidad
 async function fetchUserProfile(userId: string): Promise<ProfileResult | null> {
   try {
@@ -191,25 +204,80 @@ export const getAllMurals = async (): Promise<Mural[]> => {
   return formattedMurals;
 };
 
-// Obtener un mural por ID
+// Obtener un mural por ID con caché y manejo mejorado de errores
 export const getMuralById = async (id: string): Promise<Mural | null> => {
-  const supabase = getSupabaseClient();
+  try {
+    // Verificar primero en caché
+    const cached = muralCache.get(id);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      console.log(`Usando mural en caché para ID: ${id}`);
+      return cached.data;
+    }
 
-  const { data: mural, error } = await supabase
-    .from("murals")
-    .select("*")
-    .eq("id", id)
-    .single();
+    const supabase = getSupabaseClient();
 
-  if (error) {
-    console.error(`Error al obtener mural ${id}:`, error);
-    return null;
+    // Hacer la consulta con un timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const { data: mural, error } = await supabase
+        .from("murals")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      clearTimeout(timeoutId);
+
+      if (error) {
+        console.error(`Error al obtener mural ${id}:`, error);
+        // Actualizar caché incluso con null para prevenir consultas repetidas del mismo ID inválido
+        muralCache.set(id, { data: null, timestamp: Date.now() });
+        return null;
+      }
+
+      if (!mural) {
+        muralCache.set(id, { data: null, timestamp: Date.now() });
+        return null;
+      }
+
+      // Convertir mural al formato de la aplicación, incluyendo items y permisos
+      const formattedMural = await convertMuralFromDB(mural, true, true);
+
+      // Guardar en caché
+      muralCache.set(id, { data: formattedMural, timestamp: Date.now() });
+
+      return formattedMural;
+    } catch (innerError) {
+      clearTimeout(timeoutId);
+      throw innerError;
+    }
+  } catch (e) {
+    console.error(`Error al obtener mural ${id}:`, e);
+
+    // Si es un error de timeout o conexión, no cachear para permitir reintentos
+    if (
+      e instanceof Error &&
+      !(
+        e.name === "AbortError" ||
+        e.message.includes("fetch") ||
+        e.message.includes("network")
+      )
+    ) {
+      muralCache.set(id, { data: null, timestamp: Date.now() });
+    }
+
+    throw e;
   }
+};
 
-  if (!mural) return null;
-
-  // Convertir mural al formato de la aplicación, incluyendo items y permisos
-  return await convertMuralFromDB(mural, true, true);
+// Añadir método para limpiar la caché
+export const clearMuralCache = (muralId?: string) => {
+  if (muralId) {
+    muralCache.delete(muralId);
+  } else {
+    muralCache.clear();
+  }
 };
 
 // Verificar si un usuario tiene acceso a un mural
@@ -276,7 +344,12 @@ export const getUserRoleInMural = async (
   }
 
   // El propietario tiene el rol más alto
-  if (mural.owner_id === userId) return "owner";
+  if (mural.owner_id === userId) {
+    console.log(
+      `getUserRoleInMural: Usuario ${userId} es propietario del mural ${muralId}`
+    );
+    return "owner";
+  }
 
   // Buscar permisos específicos
   const { data: permission, error: permError } = await supabase
@@ -304,6 +377,23 @@ export const canEditMural = async (
 ): Promise<boolean> => {
   const supabase = getSupabaseClient();
 
+  console.log(
+    `Verificando permisos de edición - muralId: ${muralId}, userId: ${userId}`
+  );
+
+  // Comprobar si hay un ID en localStorage como respaldo
+  const backupUserId =
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem("auth_user_id")
+      : null;
+  const effectiveUserId = userId || backupUserId;
+
+  if (backupUserId && !userId) {
+    console.log(
+      `ID de usuario no proporcionado, usando ID de respaldo: ${backupUserId}`
+    );
+  }
+
   // Obtener el mural con la configuración de edición
   const { data: mural, error } = await supabase
     .from("murals")
@@ -319,14 +409,40 @@ export const canEditMural = async (
     return false;
   }
 
-  // El propietario siempre puede editar
-  if (mural.owner_id === userId) return true;
+  // Comprobar si el usuario es propietario (usando la función de comparación segura)
+  const isOwner = safeIdComparison(mural.owner_id, effectiveUserId);
+
+  console.log(
+    `Comparación segura de IDs: '${mural.owner_id?.toLowerCase() || ""}' === '${
+      effectiveUserId?.toLowerCase() || ""
+    }'`
+  );
+  console.log(
+    `Usuario ${effectiveUserId} es propietario del mural ${muralId}: ${
+      isOwner ? "SÍ" : "NO"
+    }`
+  );
+  console.log(`ID del propietario original: ${mural.owner_id}`);
+
+  // El propietario siempre puede editar, sin importar la configuración allow_editing
+  if (isOwner) {
+    console.log("Usuario ES propietario, PERMITIENDO edición");
+    return true;
+  }
 
   // Verificar si el usuario tiene rol de editor
-  const role = await getUserRoleInMural(muralId, userId);
+  const role = await getUserRoleInMural(muralId, effectiveUserId);
+  console.log(
+    `Rol del usuario ${effectiveUserId} en el mural ${muralId}: ${
+      role || "ninguno"
+    }`
+  );
 
-  // Solo propietarios y editores pueden editar, y solo si está permitida la edición
-  return role === "editor" && mural.allow_editing;
+  // Solo editores pueden editar si está permitida la edición
+  const canEdit = role === "editor" && mural.allow_editing;
+  console.log(`¿Usuario puede editar? ${canEdit ? "SÍ" : "NO"}`);
+
+  return canEdit;
 };
 
 // Verificar si un usuario puede comentar en un mural
@@ -511,57 +627,69 @@ export const getMuralsForUser = async (
 };
 
 // Crear un nuevo mural
-export const createMural = async (
+export async function createMural(
   muralData: Partial<Mural>,
   userId: string
-): Promise<Mural | null> => {
-  const supabase = getSupabaseClient();
+): Promise<Mural | null> {
+  try {
+    console.log("Creando mural para usuario:", userId);
 
-  // Preparar datos para insertar
-  const newMural = {
-    title: muralData.title || "Nuevo Mural",
-    description: muralData.description || "",
-    color: muralData.color || "bg-gradient-to-br from-pink-400 to-purple-500",
-    layout: muralData.layout || "grid",
-    is_public: muralData.isPublic !== undefined ? muralData.isPublic : false,
-    allow_comments:
-      muralData.allowComments !== undefined ? muralData.allowComments : true,
-    allow_editing:
-      muralData.allowEditing !== undefined ? muralData.allowEditing : true,
-    owner_id: userId,
-    tags: muralData.tags || [],
-    category: muralData.category || "personal",
-  };
+    if (!userId) {
+      console.error("Error: Se intentó crear un mural sin ID de usuario");
+      return null;
+    }
 
-  // Insertar el nuevo mural
-  const { data: mural, error } = await supabase
-    .from("murals")
-    .insert([newMural])
-    .select()
-    .single();
+    const supabase = getSupabaseClient();
 
-  if (error) {
-    console.error("Error al crear mural:", error);
-    return null;
+    // Preparar datos para insertar
+    const newMural = {
+      title: muralData.title || "Nuevo Mural",
+      description: muralData.description || "",
+      color: muralData.color || "bg-gradient-to-br from-pink-400 to-purple-500",
+      layout: muralData.layout || "grid",
+      is_public: muralData.isPublic !== undefined ? muralData.isPublic : false,
+      allow_comments:
+        muralData.allowComments !== undefined ? muralData.allowComments : true,
+      allow_editing:
+        muralData.allowEditing !== undefined ? muralData.allowEditing : true,
+      owner_id: userId,
+      tags: muralData.tags || [],
+      category: muralData.category || "personal",
+    };
+
+    // Insertar el nuevo mural
+    const { data: mural, error } = await supabase
+      .from("murals")
+      .insert([newMural])
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Error al crear mural:", error);
+      return null;
+    }
+
+    if (!mural) return null;
+
+    // Registrar actividad
+    await supabase.from("activity_logs").insert([
+      {
+        user_id: userId,
+        mural_id: mural.id,
+        action_type: "create_mural",
+        details: { title: mural.title },
+      },
+    ]);
+
+    // Convertir y devolver el mural creado
+    return await convertMuralFromDB(mural, true, true);
+  } catch (error) {
+    console.error("Error en createMural:", error);
+    throw error;
   }
+}
 
-  if (!mural) return null;
-
-  // Registrar actividad
-  await supabase.from("activity_logs").insert([
-    {
-      user_id: userId,
-      mural_id: mural.id,
-      action_type: "create_mural",
-      details: { title: mural.title },
-    },
-  ]);
-
-  // Convertir y devolver el mural creado
-  return await convertMuralFromDB(mural, true, true);
-};
-
-// Actualizar un mural existente
+// Actualizar un mural existente - Añadir transformación de datos correcta
 export const updateMural = async (
   id: string,
   updates: Partial<Mural>,
@@ -569,12 +697,43 @@ export const updateMural = async (
 ): Promise<Mural | null> => {
   const supabase = getSupabaseClient();
 
-  // Verificar permisos
-  const canEdit = await canEditMural(id, userId);
-  if (!canEdit) return null;
+  console.log("DEBUG updateMural: Iniciando con ID:", id, "userId:", userId);
 
-  // Verificar si el usuario es propietario
-  const isOwner = (await getUserRoleInMural(id, userId)) === "owner";
+  // Verificar explícitamente si el usuario es propietario primero
+  const { data: mural, error: muralError } = await supabase
+    .from("murals")
+    .select("owner_id")
+    .eq("id", id)
+    .single();
+
+  if (muralError || !mural) {
+    console.error(`Error al verificar propiedad del mural ${id}:`, muralError);
+    return null;
+  }
+
+  // Comprobar si el usuario es propietario directamente
+  const isOwner =
+    mural.owner_id &&
+    userId &&
+    mural.owner_id.toLowerCase() === userId.toLowerCase();
+
+  console.log(
+    `updateMural: Usuario ${userId} es propietario del mural ${id}: ${
+      isOwner ? "SÍ" : "NO"
+    }`
+  );
+
+  // Si es propietario, permitir la edición sin verificar más permisos
+  if (!isOwner) {
+    // Solo verificar canEdit si no es el propietario
+    const canEdit = await canEditMural(id, userId);
+    if (!canEdit) {
+      console.error(
+        `updateMural: Usuario ${userId} no tiene permisos para editar el mural ${id}`
+      );
+      return null;
+    }
+  }
 
   // Preparar actualizaciones
   const muralUpdates: any = {};
@@ -615,52 +774,75 @@ export const updateMural = async (
 
   // Actualizar elementos si se proporcionan
   if (updates.items) {
-    // Primero, eliminar todos los elementos existentes
-    const { error: deleteError } = await supabase
-      .from("mural_items")
-      .delete()
-      .eq("mural_id", id);
-
-    if (deleteError) {
-      console.error(
-        `Error al eliminar elementos del mural ${id}:`,
-        deleteError
+    try {
+      console.log(
+        `Actualizando ${updates.items.length} elementos en el mural ${id}`
       );
-      return null;
-    }
 
-    // Luego, insertar los nuevos elementos
-    const items = updates.items.map((item) => ({
-      mural_id: id,
-      type: item.type,
-      content: item.content,
-      title: item.title || null,
-      description: item.description || null,
-      caption: item.caption || null,
-      position_x: item.position.x,
-      position_y: item.position.y,
-      color: item.color || null,
-      created_by: item.createdBy || userId,
-      created_at: item.createdAt
-        ? item.createdAt.toISOString()
-        : new Date().toISOString(),
-      updated_at: item.updatedAt
-        ? item.updatedAt.toISOString()
-        : new Date().toISOString(),
-    }));
-
-    if (items.length > 0) {
-      const { error: insertError } = await supabase
+      // Primero, eliminar todos los elementos existentes
+      const { error: deleteError } = await supabase
         .from("mural_items")
-        .insert(items);
+        .delete()
+        .eq("mural_id", id);
 
-      if (insertError) {
+      if (deleteError) {
         console.error(
-          `Error al insertar elementos en el mural ${id}:`,
-          insertError
+          `Error al eliminar elementos del mural ${id}:`,
+          deleteError
         );
         return null;
       }
+
+      // Convertir los elementos al formato que espera la base de datos
+      const items = updates.items.map((item) => {
+        // Comprobar si la posición es un objeto válido con x e y
+        if (
+          !item.position ||
+          typeof item.position.x !== "number" ||
+          typeof item.position.y !== "number"
+        ) {
+          console.error("Posición inválida para el elemento:", item);
+          // Proporcionar una posición predeterminada
+          item.position = { x: 100, y: 100 };
+        }
+
+        return {
+          mural_id: id,
+          id: item.id, // Mantener el mismo ID
+          type: item.type,
+          content: item.content,
+          title: item.title || null,
+          description: item.description || null,
+          caption: item.caption || null,
+          position_x: item.position.x,
+          position_y: item.position.y,
+          color: item.color || null,
+          created_by: item.createdBy || userId,
+          created_at: item.createdAt
+            ? new Date(item.createdAt).toISOString()
+            : new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+      });
+
+      if (items.length > 0) {
+        console.log("Insertando elementos con estructura:", items[0]);
+
+        const { error: insertError } = await supabase
+          .from("mural_items")
+          .insert(items);
+
+        if (insertError) {
+          console.error(
+            `Error al insertar elementos en el mural ${id}:`,
+            insertError
+          );
+          return null;
+        }
+      }
+    } catch (error) {
+      console.error("Error en el procesamiento de items:", error);
+      return null;
     }
   }
 

@@ -1,8 +1,7 @@
 "use client"
 
 import type React from "react"
-
-import { useState } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -16,15 +15,59 @@ import { Switch } from "@/components/ui/switch"
 import { BackgroundSelector } from "@/components/background-selector"
 import { TemplateSelector } from "@/components/template-selector"
 import { ItemStyleCustomizer } from "@/components/item-style-customizer"
-import { toast } from "@/components/ui/use-toast"
+import { useToast } from "@/components/ui/use-toast"
 import { Toaster } from "@/components/ui/toaster"
 import { createMural } from "@/services/mural-service"
 import { useAuth } from "@/contexts/auth-context"
+import { ProtectedRoute } from "@/components/protected-route"
+import { useGlobalToast } from "@/components/ui/toast-helper"
 
-export default function NuevoMural() {
-  const { user } = useAuth()
-  const router = useRouter()
-  const [loading, setLoading] = useState(false)
+export default function NuevoMuralPage() {
+  return (
+    <ProtectedRoute>
+      <NuevoMural />
+    </ProtectedRoute>
+  );
+}
+
+function NuevoMural() {
+  const { user } = useAuth();
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const { toast } = useGlobalToast();
+  const [fallbackUser, setFallbackUser] = useState<any>(null);
+  const formSubmitted = useRef(false);
+
+  useEffect(() => {
+    if (!user && typeof window !== 'undefined') {
+      const userId = localStorage.getItem("auth_user_id");
+      if (userId) {
+        const localUser = {
+          id: userId,
+          name: localStorage.getItem("auth_user_name") || "Usuario",
+          email: localStorage.getItem("auth_user_email") || "",
+          role: localStorage.getItem("auth_user_role") || "user"
+        };
+        setFallbackUser(localUser);
+        console.log("NuevoMural: Usando datos de usuario del localStorage:", localUser);
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
+    const checkGlobalUser = () => {
+      if (!user && typeof window !== 'undefined' && (window as any).__AUTH_USER) {
+        setFallbackUser((window as any).__AUTH_USER);
+        console.log("NuevoMural: Usando datos de usuario globales:", (window as any).__AUTH_USER);
+      }
+    };
+
+    checkGlobalUser();
+
+    const intervalId = setInterval(checkGlobalUser, 1000);
+    return () => clearInterval(intervalId);
+  }, [user]);
+
   const [formData, setFormData] = useState({
     title: "",
     description: "",
@@ -86,28 +129,46 @@ export default function NuevoMural() {
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+    e.preventDefault();
 
-    if (!user) {
-      toast({
-        title: "Error",
-        description: "Debes iniciar sesión para crear un mural",
-        variant: "destructive",
-      })
-      return
+    if (formSubmitted.current) {
+      console.log("Formulario ya enviado, ignorando solicitud duplicada");
+      return;
     }
 
+    formSubmitted.current = true;
+
+    const effectiveUser = user || fallbackUser || (typeof window !== 'undefined' ? (window as any).__AUTH_USER : null);
+
+    if (!effectiveUser) {
+      console.log("No hay usuario disponible en el momento del envío");
+      toast({
+        title: "Error de autenticación",
+        description: "No se pudo verificar tu sesión. Por favor, intenta iniciar sesión nuevamente.",
+        variant: "destructive",
+      });
+
+      setTimeout(() => router.push("/login"), 1500);
+      return;
+    }
+
+    console.log("Usando usuario para crear mural:", effectiveUser);
+
     if (!formData.title.trim()) {
+      console.log("Título del mural vacío");
       toast({
         title: "Error",
         description: "El título del mural es obligatorio",
         variant: "destructive",
-      })
-      return
+      });
+      formSubmitted.current = false;
+      return;
     }
 
-    setLoading(true)
+    setLoading(true);
     try {
+      console.log("Creando mural con usuario:", effectiveUser.id);
+
       const newMural = await createMural(
         {
           title: formData.title,
@@ -120,27 +181,35 @@ export default function NuevoMural() {
           layout: formData.layout,
           itemStyle: formData.itemStyle,
         },
-        user.id,
-      )
+        effectiveUser.id
+      );
 
-      if (newMural) {
+      console.log("Mural creado:", newMural);
+
+      if (newMural && newMural.id) {
         toast({
           title: "Mural creado",
           description: "Tu nuevo mural ha sido creado correctamente",
-        })
-        router.push(`/murales/${newMural.id}`)
+        });
+
+        setTimeout(() => {
+          console.log("Redirigiendo a:", `/murales/${newMural.id}`);
+          router.push(`/murales/${newMural.id}`);
+        }, 500);
       } else {
-        throw new Error("No se pudo crear el mural")
+        console.error("El mural fue creado pero sin ID:", newMural);
+        throw new Error("El mural fue creado sin un ID válido");
       }
     } catch (error) {
-      console.error("Error al crear mural:", error)
+      console.error("Error al crear mural:", error);
       toast({
         title: "Error",
         description: "Ocurrió un error al crear el mural",
         variant: "destructive",
-      })
+      });
+      formSubmitted.current = false;
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 

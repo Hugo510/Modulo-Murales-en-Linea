@@ -1,7 +1,14 @@
 "use client"
 
-import { useState } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { useState, useEffect } from "react"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription
+} from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -9,15 +16,27 @@ import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { FileText, ImageIcon, Link, Video, Upload } from "lucide-react"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { logger } from "@/utils/logger" // Importar la utilidad de logging
+
+// Exportar la interfaz MuralItemData para que pueda ser importada desde otros archivos
+export interface MuralItemData {
+  type: "link" | "video" | "image" | "text" | "file"; // Tipo específico en lugar de string
+  content: string;
+  title?: string;
+  description?: string;
+  caption?: string;
+  color?: string;
+  style?: any;
+}
 
 interface AddItemDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  onAddItem: (item: any) => void
+  onAddItem: (item: MuralItemData) => void
 }
 
 export function AddItemDialog({ open, onOpenChange, onAddItem }: AddItemDialogProps) {
-  const [activeTab, setActiveTab] = useState("text")
+  const [activeTab, setActiveTab] = useState<"text" | "image" | "link" | "video" | "file">("text");
 
   const [textContent, setTextContent] = useState("")
   const [textColor, setTextColor] = useState("bg-pink-100")
@@ -38,77 +57,168 @@ export function AddItemDialog({ open, onOpenChange, onAddItem }: AddItemDialogPr
   const [fileTitle, setFileTitle] = useState("")
   const [fileColor, setFileColor] = useState("bg-amber-100")
 
-  const handleSubmit = () => {
-    let newItem = { type: activeTab }
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-    switch (activeTab) {
-      case "text":
-        if (!textContent.trim()) return
-        newItem = { ...newItem, content: textContent, color: textColor }
-        break
-      case "image":
-        if (!imageUrl.trim()) return
-        newItem = {
-          ...newItem,
-          content: imageUrl || "/placeholder.svg?height=200&width=300",
-          caption: imageCaption,
-          color: imageColor,
-        }
-        break
-      case "link":
-        if (!linkUrl.trim()) return
-        newItem = {
-          ...newItem,
-          content: linkUrl,
-          title: linkTitle,
-          description: linkDescription,
-          color: linkColor,
-        }
-        break
-      case "video":
-        if (!videoUrl.trim()) return
-        newItem = {
-          ...newItem,
-          content: videoUrl || "https://www.youtube.com/embed/dQw4w9WgXcQ",
-          title: videoTitle,
-          color: videoColor,
-        }
-        break
-      case "file":
-        if (!fileTitle.trim()) return
-        newItem = {
-          ...newItem,
-          content: "documento.pdf",
-          title: fileTitle,
-          color: fileColor,
-        }
-        break
+  // Añadir una función adaptadora para resolver el problema de tipos
+  const handleTabChange = (value: string) => {
+    // Verificar que el valor recibido sea uno de los tipos permitidos
+    if (value === "text" || value === "image" || value === "link" || value === "video" || value === "file") {
+      setActiveTab(value);
+    }
+  };
+
+  // Limpiar estado al abrir o cerrar el diálogo
+  useEffect(() => {
+    // Solo limpiar al cerrar el diálogo
+    if (!open) {
+      logger.debug('Limpiando estado del diálogo', undefined, 'AddItemDialog');
+      setTextContent("");
+      setImageUrl("");
+      setImageCaption("");
+      setLinkUrl("");
+      setLinkTitle("");
+      setLinkDescription("");
+      setVideoUrl("");
+      setVideoTitle("");
+      setFileTitle("");
+      setIsSubmitting(false);
+    }
+  }, [open]);
+
+  const handleSubmit = async () => {
+    // Evitar envíos dobles
+    if (isSubmitting) {
+      logger.warn('Evitando envío duplicado', undefined, 'AddItemDialog');
+      return;
     }
 
-    onAddItem(newItem)
+    logger.group('Procesando formulario para añadir elemento', 'info', 'AddItemDialog');
+    logger.debug(`Tipo de elemento seleccionado: ${activeTab}`, undefined, 'AddItemDialog');
 
-    // Limpiar formularios
-    setTextContent("")
-    setImageUrl("")
-    setImageCaption("")
-    setLinkUrl("")
-    setLinkTitle("")
-    setLinkDescription("")
-    setVideoUrl("")
-    setVideoTitle("")
-    setFileTitle("")
-  }
+    // Marcar como enviando
+    setIsSubmitting(true);
+
+    // Inicializar con el tipo correcto para que TypeScript acepte todas las propiedades
+    let newItem: MuralItemData = {
+      type: activeTab, // Ahora activeTab ya es del tipo correcto
+      content: "" // Proporcionar un valor por defecto para content
+    };
+
+    try {
+      switch (activeTab) {
+        case "text":
+          if (!textContent.trim()) {
+            logger.warn('No se puede añadir texto vacío', undefined, 'AddItemDialog');
+            setIsSubmitting(false);
+            return;
+          }
+          newItem = { ...newItem, content: textContent, color: textColor };
+          break;
+        case "image":
+          if (!imageUrl.trim()) {
+            logger.warn('No se puede añadir imagen sin URL', undefined, 'AddItemDialog');
+            logger.groupEnd();
+            setIsSubmitting(false);
+            return;
+          }
+          logger.debug('Creando elemento de imagen', { url: imageUrl, caption: imageCaption }, 'AddItemDialog');
+          newItem = {
+            ...newItem,
+            content: imageUrl || "/placeholder.svg?height=200&width=300",
+            caption: imageCaption,
+            color: imageColor,
+          };
+          break
+        case "link":
+          if (!linkUrl.trim()) {
+            logger.warn('No se puede añadir enlace sin URL', undefined, 'AddItemDialog');
+            logger.groupEnd();
+            setIsSubmitting(false);
+            return;
+          }
+          logger.debug('Creando elemento de enlace', { url: linkUrl, title: linkTitle }, 'AddItemDialog');
+          newItem = {
+            ...newItem,
+            content: linkUrl,
+            title: linkTitle,
+            description: linkDescription,
+            color: linkColor,
+          };
+          break
+        case "video":
+          if (!videoUrl.trim()) {
+            logger.warn('No se puede añadir video sin URL', undefined, 'AddItemDialog');
+            logger.groupEnd();
+            setIsSubmitting(false);
+            return;
+          }
+          logger.debug('Creando elemento de video', { url: videoUrl, title: videoTitle }, 'AddItemDialog');
+          newItem = {
+            ...newItem,
+            content: videoUrl || "https://www.youtube.com/embed/dQw4w9WgXcQ",
+            title: videoTitle,
+            color: videoColor,
+          };
+          break
+        case "file":
+          if (!fileTitle.trim()) {
+            logger.warn('No se puede añadir archivo sin título', undefined, 'AddItemDialog');
+            logger.groupEnd();
+            setIsSubmitting(false);
+            return;
+          }
+          logger.debug('Creando elemento de archivo', { title: fileTitle }, 'AddItemDialog');
+          newItem = {
+            ...newItem,
+            content: "documento.pdf",
+            title: fileTitle,
+            color: fileColor,
+          };
+          break
+      }
+
+      logger.info('Enviando nuevo elemento para añadir al mural', newItem, 'AddItemDialog');
+
+      // Implementar mecanismo de protección anti-errores
+      try {
+        // Cerrar el diálogo inmediatamente para evitar múltiples envíos
+        onOpenChange(false);
+
+        // Enviar después de cerrar el diálogo
+        setTimeout(() => {
+          onAddItem(newItem);
+        }, 50);
+      } catch (error) {
+        logger.error('Error al añadir elemento', { error }, 'AddItemDialog');
+      }
+    } catch (error) {
+      logger.error('Error al procesar formulario', { error }, 'AddItemDialog');
+    } finally {
+      setIsSubmitting(false);
+      logger.groupEnd();
+    }
+  };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(newOpen) => {
+      // Evitar cerrar el diálogo si hay un envío en curso
+      if (!newOpen && isSubmitting) {
+        logger.warn('Evitando cerrar el diálogo durante envío', undefined, 'AddItemDialog');
+        return;
+      }
+      onOpenChange(newOpen);
+    }}>
       <DialogContent className="sm:max-w-[550px]">
         <DialogHeader>
           <DialogTitle className="text-xl bg-clip-text text-transparent bg-gradient-to-r from-pink-500 to-purple-600">
             Añadir nuevo elemento
           </DialogTitle>
+          <DialogDescription>
+            Selecciona el tipo de elemento que deseas añadir a tu mural y configura sus propiedades.
+          </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="text" value={activeTab} onValueChange={setActiveTab}>
+        <Tabs defaultValue="text" value={activeTab} onValueChange={handleTabChange}>
           <TabsList className="grid grid-cols-5">
             <TabsTrigger value="text" className="flex items-center gap-2">
               <FileText className="h-4 w-4 text-blue-500" />
@@ -395,17 +505,27 @@ export function AddItemDialog({ open, onOpenChange, onAddItem }: AddItemDialogPr
         </Tabs>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={isSubmitting}
+          >
             Cancelar
           </Button>
           <Button
             onClick={handleSubmit}
+            disabled={isSubmitting}
             className="bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700"
           >
-            Añadir
+            {isSubmitting ? (
+              <>
+                <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                Añadiendo...
+              </>
+            ) : "Añadir"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+  );
 }

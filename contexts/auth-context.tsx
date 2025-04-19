@@ -14,22 +14,47 @@ interface User {
   role: string
 }
 
-// Definir el tipo para el contexto de autenticación
+// Agregar tipo para información de dispositivo
+interface DeviceInfo {
+  type: string;
+  name: string;
+  os: string;
+}
+
+// Agregar tipo para información de ubicación
+interface LocationInfo {
+  city: string;
+  country: string;
+}
+
+// Definir el tipo para la sesión
+interface SessionInfo {
+  id: string
+  deviceInfo: DeviceInfo
+  location: LocationInfo
+  lastActive: string
+  ip?: string
+  userAgent?: string
+}
+
+// Actualizar el tipo para el contexto de autenticación
 interface AuthContextType {
   user: User | null
   isAuthenticated: boolean
   isLoading: boolean
+  currentSession: SessionInfo | null // Agregar currentSession
   login: (email: string, password: string) => Promise<boolean>
   register: (name: string, email: string, password: string) => Promise<boolean>
   logout: () => Promise<void>
   checkSuspiciousActivity: (userId: string) => Promise<boolean>
 }
 
-// Crear el contexto con un valor predeterminado
+// Crear el contexto con un valor predeterminado actualizado
 const AuthContext = createContext<AuthContextType>({
   user: null,
   isAuthenticated: false,
   isLoading: true,
+  currentSession: null, // Agregar valor por defecto
   login: async () => false,
   register: async () => false,
   logout: async () => { },
@@ -39,15 +64,225 @@ const AuthContext = createContext<AuthContextType>({
 // Hook personalizado para usar el contexto de autenticación
 export const useAuth = () => useContext(AuthContext)
 
+// Agregar esta función al principio del archivo, antes de la definición del componente AuthProvider
+function detectLocalAuthentication(): { userId: string | null, isRecent: boolean } {
+  if (typeof window === 'undefined') return { userId: null, isRecent: false };
+
+  const userId = localStorage.getItem("auth_user_id");
+  const timestamp = localStorage.getItem("login_timestamp");
+  const isRecent = timestamp && (Date.now() - parseInt(timestamp)) < 120000; // 2 minutos
+
+  return { userId, isRecent: !!userId && isRecent };
+}
+
 // Proveedor de autenticación
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [authReady, setAuthReady] = useState(false)
+  const [currentSession, setCurrentSession] = useState<SessionInfo | null>(null) // Agregar estado para sesión actual
   const router = useRouter()
   const authTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const authAttempts = useRef(0)
+
+  // Función auxiliar para determinar el tipo de dispositivo
+  function getDeviceInfo(): DeviceInfo {
+    if (typeof window === 'undefined') {
+      return { type: "Unknown", name: "Servidor", os: "Unknown" };
+    }
+
+    const userAgent = window.navigator.userAgent.toLowerCase();
+
+    let type = "Desktop";
+    if (/(android|webos|iphone|ipad|ipod|blackberry|windows phone)/i.test(userAgent)) {
+      type = /ipad/i.test(userAgent) ? "Tablet" : "Mobile";
+    }
+
+    let name = "Navegador";
+    if (userAgent.indexOf("firefox") > -1) name = "Firefox";
+    else if (userAgent.indexOf("chrome") > -1) name = "Chrome";
+    else if (userAgent.indexOf("safari") > -1) name = "Safari";
+    else if (userAgent.indexOf("edge") > -1) name = "Edge";
+    else if (userAgent.indexOf("opera") > -1) name = "Opera";
+
+    let os = "Desconocido";
+    if (userAgent.indexOf("windows") > -1) os = "Windows";
+    else if (userAgent.indexOf("mac") > -1) os = "MacOS";
+    else if (userAgent.indexOf("linux") > -1) os = "Linux";
+    else if (userAgent.indexOf("android") > -1) os = "Android";
+    else if (userAgent.indexOf("iphone") > -1 || userAgent.indexOf("ipad") > -1) os = "iOS";
+
+    return { type, name, os };
+  }
+
+  // Añadir función para obtener información de sesión con manejo de errores mucho más robusto
+  const getSessionInfo = useCallback(async (userId: string) => {
+    try {
+      if (!userId) return null;
+
+      // Obtener información del dispositivo actual basado en User-Agent
+      const deviceInfo = getDeviceInfo();
+
+      // Crear una sesión básica con la información del dispositivo actual
+      const basicSession: SessionInfo = {
+        id: crypto.randomUUID(),
+        deviceInfo: deviceInfo,
+        location: { city: "Desconocida", country: "Desconocido" },
+        lastActive: new Date().toISOString(),
+      };
+
+      // Primero intentar recuperar un fallback de sesión guardado en localStorage/sessionStorage
+      try {
+        const fallbackSession = localStorage.getItem("fallback_session") || sessionStorage.getItem("fallback_session");
+        if (fallbackSession) {
+          const parsedSession = JSON.parse(fallbackSession);
+          if (parsedSession && parsedSession.deviceInfo) {
+            console.log("[Auth] Usando información de sesión fallback");
+            setCurrentSession(parsedSession);
+
+            // Intentar actualizar asíncronamente sin bloquear
+            setTimeout(async () => {
+              try {
+                await fetchSessionInfo(userId);
+              } catch (e) {
+                console.warn("[Auth] No se pudo actualizar información de sesión fallback:", e);
+              }
+            }, 1000);
+
+            return parsedSession;
+          }
+        }
+      } catch (fallbackError) {
+        console.warn("[Auth] Error al recuperar sesión fallback:", fallbackError);
+      }
+
+      // Establecer información básica de sesión inmediatamente para evitar estado vacío
+      setCurrentSession(basicSession);
+
+      // Intentar obtener información detallada del servidor
+      const sessionResult = await fetchSessionInfo(userId);
+      if (sessionResult) {
+        return sessionResult;
+      }
+
+      return basicSession;
+    } catch (error) {
+      console.error("[Auth] Error general al crear información de sesión:", error);
+
+      // Crear una sesión fallback genérica en caso de error
+      const fallbackSession: SessionInfo = {
+        id: crypto.randomUUID(),
+        deviceInfo: {
+          type: "Desktop",
+          name: "Navegador",
+          os: "Desconocido",
+        },
+        location: { city: "Desconocida", country: "Desconocido" },
+        lastActive: new Date().toISOString(),
+      };
+
+      setCurrentSession(fallbackSession);
+      return fallbackSession;
+    }
+  }, []);
+
+  // Función para obtener la sesión del servidor, aislada para mejor manejo de errores
+  const fetchSessionInfo = async (userId: string): Promise<SessionInfo | null> => {
+    try {
+      console.log("[Auth] Obteniendo información detallada de sesión del servidor...");
+
+      // Crear URL con timestamp para evitar caché
+      const timestamp = Date.now();
+      const apiUrl = `/api/user/sessions/current?_ts=${timestamp}`;
+
+      // Realizar la solicitud al servidor con timeout limitado
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+      try {
+        const response = await fetch(apiUrl, {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache, no-store",
+            "Pragma": "no-cache"
+          },
+          signal: controller.signal,
+          cache: "no-store",
+          credentials: "include"
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          const sessionData = await response.json();
+
+          if (sessionData && sessionData.session) {
+            console.log("[Auth] Información de sesión recibida del servidor:", sessionData.session);
+
+            setCurrentSession(sessionData.session);
+
+            // Guardar en localStorage y sessionStorage para respaldo
+            try {
+              localStorage.setItem("fallback_session", JSON.stringify(sessionData.session));
+              sessionStorage.setItem("fallback_session", JSON.stringify(sessionData.session));
+              console.log("[Auth] Información de sesión guardada como fallback");
+            } catch (storageError) {
+              console.warn("[Auth] Error al guardar sesión en storage:", storageError);
+            }
+
+            return sessionData.session;
+          } else if (sessionData.warning) {
+            console.warn("[Auth] Advertencia del servidor:", sessionData.warning);
+          }
+        } else {
+          console.warn("[Auth] API de sesiones respondió con código:", response.status);
+        }
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        throw fetchError;
+      }
+    } catch (fetchError) {
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        console.warn("[Auth] Timeout al obtener información de sesión");
+      } else {
+        console.error("[Auth] Error al obtener información de sesión del servidor:", fetchError);
+      }
+
+      // Generar datos locales como fallback
+      const offlineSession = generateOfflineSessionInfo(userId);
+      setCurrentSession(offlineSession);
+
+      // Guardar para uso futuro
+      try {
+        localStorage.setItem("fallback_session", JSON.stringify(offlineSession));
+        sessionStorage.setItem("fallback_session", JSON.stringify(offlineSession));
+      } catch (e) {
+        console.warn("[Auth] Error al guardar sesión fallback:", e);
+      }
+
+      return offlineSession;
+    }
+
+    return null;
+  };
+
+  // Generar información de sesión offline
+  const generateOfflineSessionInfo = (userId: string): SessionInfo => {
+    const deviceInfo = getDeviceInfo();
+    return {
+      id: `local_${Date.now()}`,
+      deviceInfo: deviceInfo,
+      location: {
+        city: "Local",
+        country: "Tu país"
+      },
+      lastActive: new Date().toISOString(),
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Unknown',
+      ip: "local"
+    };
+  };
 
   // Mejora para manejar errores de red en obtención de usuario
   const getCurrentUser = useCallback(async () => {
@@ -55,19 +290,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.log("[Auth] Obteniendo usuario actual...");
       authAttempts.current += 1;
 
-      // Si hemos intentado demasiadas veces, dejar de intentar
+      // Si hemos intentado demasiadas veces, verificar login reciente
       if (authAttempts.current > 3) {
-        console.warn("[Auth] Demasiados intentos de autenticación, finalizando proceso.");
+        console.warn("[Auth] Múltiples intentos de autenticación, verificando alternativas...");
 
-        // Verificar si hay un indicador de login reciente en localStorage
-        const loginSuccess = localStorage.getItem("login_success");
-        const userId = localStorage.getItem("auth_user_id");
-        const timestamp = localStorage.getItem("login_timestamp");
-        const isRecent = timestamp && (Date.now() - parseInt(timestamp)) < 60000; // 60 segundos
+        // Verificar si hay indicador de login reciente en localStorage
+        const { userId, isRecent } = detectLocalAuthentication();
+        if (userId && isRecent) {
+          console.log("[Auth] Detectado login reciente, permitiendo acceso provisional");
 
-        if (loginSuccess === "true" && userId && isRecent) {
-          console.log("[Auth] Detectado login reciente a pesar del fallo de red, permitiendo acceso provisional");
-          // Permitimos acceso con datos mínimos basados en localStorage
+          // Permitimos acceso con datos locales
           const provisionalUser = {
             id: userId,
             name: localStorage.getItem("auth_user_name") || "Usuario",
@@ -77,14 +309,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
           setUser(provisionalUser);
           setIsAuthenticated(true);
-        } else {
-          setUser(null);
-          setIsAuthenticated(false);
-        }
+          setIsLoading(false);
+          setAuthReady(true);
 
-        setIsLoading(false);
-        setAuthReady(true);
-        return null;
+          // Programar un reintento cuando haya mejorado la conexión
+          setTimeout(() => {
+            authAttempts.current = 0;
+            getCurrentUser().catch(err =>
+              console.warn("[Auth] Error en reintento automático:", err)
+            );
+          }, 5000);
+
+          return provisionalUser;
+        }
       }
 
       const supabase = getSupabaseClient();
@@ -102,6 +339,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.log("[Auth] No hay sesión activa");
         setUser(null);
         setIsAuthenticated(false);
+        setCurrentSession(null); // Limpiar sesión
         setIsLoading(false);
         setAuthReady(true);
         return null;
@@ -130,6 +368,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.log("[Auth] Usuario autenticado:", userInfo.name, "con ID:", userInfo.id);
 
       setUser(userInfo);
+
+      // Actualizar información de sesión
+      getSessionInfo(userInfo.id);
 
       return userInfo;
     } catch (error) {
@@ -179,7 +420,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setAuthReady(true);
       return null;
     }
-  }, []);
+  }, [getSessionInfo]);
 
   useEffect(() => {
     let isMounted = true;
@@ -191,6 +432,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setAuthReady(true);
       }
     }, 10000);
+
+    // Añadir verificación inicial de datos locales
+    const { userId, isRecent } = detectLocalAuthentication();
+    if (userId && isRecent) {
+      console.log("[Auth] Detectados datos de autenticación local, inicializando estado...");
+      // Configura un estado inicial basado en localStorage
+      const localUser = {
+        id: userId,
+        name: localStorage.getItem("auth_user_name") || "Usuario",
+        email: localStorage.getItem("auth_user_email") || "",
+        role: localStorage.getItem("auth_user_role") || "user"
+      };
+      setUser(localUser);
+      setIsAuthenticated(true);
+    }
 
     const checkAuth = async () => {
       try {
@@ -238,6 +494,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(null);
         setIsAuthenticated(false);
         setIsLoading(false);
+        setCurrentSession(null); // Limpiar sesión
       } else if (event === "USER_UPDATED") {
         console.log("Información de usuario actualizada");
         await getCurrentUser();
@@ -280,6 +537,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
   }, [isAuthenticated, user]);
+
+  // Añadir un efecto específico para verificar si hay un usuario autenticado
+  useEffect(() => {
+    console.log("AuthProvider: Verificando estado de autenticación...");
+    const supabase = getSupabaseClient();
+
+    // Función para obtener y establecer usuario actual
+    const initUserFromSession = async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+
+        if (sessionData?.session?.user) {
+          const userData = sessionData.session.user;
+          console.log("Usuario autenticado encontrado:", userData.id);
+
+          // Crear objeto de usuario y establecerlo en el estado
+          const userInfo: User = {
+            id: userData.id,
+            name: userData.user_metadata?.name || "Usuario",
+            email: userData.email || "",
+            role: userData.user_metadata?.role || "user",
+          };
+
+          setUser(userInfo);
+          setIsAuthenticated(true);
+
+          // Guardar ID en localStorage para referencia
+          localStorage.setItem("auth_user_id", userInfo.id);
+          localStorage.setItem("login_timestamp", Date.now().toString());
+
+          console.log("Estado de autenticación establecido:", userInfo);
+        } else {
+          console.log("No hay sesión activa");
+          setUser(null);
+          setIsAuthenticated(false);
+        }
+      } catch (error) {
+        console.error("Error verificando sesión:", error);
+      } finally {
+        setIsLoading(false);
+        setAuthReady(true);
+      }
+    };
+
+    // Ejecutar inmediatamente
+    initUserFromSession();
+
+  }, []);
 
   const login = async (email: string, password: string) => {
     console.log("[Auth] Iniciando proceso de login para:", email);
@@ -379,6 +684,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           authenticated: true
         });
 
+        // Inicializar información básica de sesión inmediatamente
+        const deviceInfo = getDeviceInfo();
+        const basicSession: SessionInfo = {
+          id: crypto.randomUUID(),
+          deviceInfo: deviceInfo,
+          location: { city: "Tu ubicación", country: "Tu país" },
+          lastActive: new Date().toISOString(),
+        };
+
+        // Guardar como fallback inmediatamente en AMBOS storages
+        try {
+          localStorage.setItem("fallback_session", JSON.stringify(basicSession));
+          sessionStorage.setItem("fallback_session", JSON.stringify(basicSession));
+        } catch (e) {
+          console.warn("[Auth] Error guardando sesión fallback:", e);
+        }
+
+        setCurrentSession(basicSession);
+
+        // Iniciar obtención de detalles en segundo plano
+        setTimeout(async () => {
+          try {
+            await getSessionInfo(userInfo.id);
+          } catch (err) {
+            console.warn("[Auth] Error secundario obteniendo sesión:", err);
+          }
+        }, 500);
+
         return true;
       } catch (stateError) {
         console.error("[Auth] Error al actualizar estado después del login:", stateError);
@@ -447,6 +780,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       setUser(null)
       setIsAuthenticated(false)
+      setCurrentSession(null) // Limpiar sesión
 
       console.log("Sesión cerrada con éxito");
       router.push('/login')
@@ -465,6 +799,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     isAuthenticated,
     isLoading,
+    currentSession,
     login,
     register,
     logout,

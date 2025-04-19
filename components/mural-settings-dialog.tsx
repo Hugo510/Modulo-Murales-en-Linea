@@ -3,7 +3,7 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -22,7 +22,7 @@ interface MuralSettingsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   muralId: string
-  onMuralUpdated?: () => void
+  onMuralUpdated: (updatedMural: Mural) => void  // Modificar aquí para aceptar un parámetro
 }
 
 export function MuralSettingsDialog({ open, onOpenChange, muralId, onMuralUpdated }: MuralSettingsDialogProps) {
@@ -174,6 +174,9 @@ export function MuralSettingsDialog({ open, onOpenChange, muralId, onMuralUpdate
           <DialogTitle className="text-xl bg-clip-text text-transparent bg-gradient-to-r from-amber-500 to-orange-600">
             Configuración del mural
           </DialogTitle>
+          <DialogDescription>
+            Personaliza las opciones y apariencia de tu mural.
+          </DialogDescription>
         </DialogHeader>
 
         <Tabs defaultValue="general">

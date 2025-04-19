@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
@@ -14,17 +14,18 @@ import { Badge } from "@/components/ui/badge"
 import { useAuth } from "@/contexts/auth-context"
 import type { Mural, PermissionRole } from "@/types/mural"
 import { shareMural, removePermission, updateMural } from "@/services/mural-service"
-import { toast } from "@/components/ui/use-toast"
+import { useToast } from "@/components/ui/use-toast"
 
 interface ShareMuralDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   mural: Mural
-  onMuralUpdated: () => void
+  onMuralUpdated: (updatedMural: Mural) => void
 }
 
 export function ShareMuralDialog({ open, onOpenChange, mural, onMuralUpdated }: ShareMuralDialogProps) {
   const { user } = useAuth()
+  const { toast } = useToast()
   const [activeTab, setActiveTab] = useState("people")
   const [searchEmail, setSearchEmail] = useState("")
   const [newRole, setNewRole] = useState<PermissionRole>("viewer")
@@ -63,7 +64,7 @@ export function ShareMuralDialog({ open, onOpenChange, mural, onMuralUpdated }: 
     if (user) {
       const updated = await updateMural(mural.id, { isPublic }, user.id)
       if (updated) {
-        onMuralUpdated()
+        onMuralUpdated(updated)
       }
     }
   }
@@ -74,7 +75,7 @@ export function ShareMuralDialog({ open, onOpenChange, mural, onMuralUpdated }: 
     if (user) {
       const updated = await updateMural(mural.id, { allowComments }, user.id)
       if (updated) {
-        onMuralUpdated()
+        onMuralUpdated(updated)
       }
     }
   }
@@ -85,7 +86,7 @@ export function ShareMuralDialog({ open, onOpenChange, mural, onMuralUpdated }: 
     if (user) {
       const updated = await updateMural(mural.id, { allowEditing }, user.id)
       if (updated) {
-        onMuralUpdated()
+        onMuralUpdated(updated)
       }
     }
   }
@@ -114,7 +115,7 @@ export function ShareMuralDialog({ open, onOpenChange, mural, onMuralUpdated }: 
 
     if (success) {
       setSearchEmail("")
-      onMuralUpdated()
+      onMuralUpdated(mural)
       toast({
         title: "Mural compartido",
         description: `El mural ha sido compartido con ${foundUser.email}`,
@@ -135,7 +136,7 @@ export function ShareMuralDialog({ open, onOpenChange, mural, onMuralUpdated }: 
     const success = await removePermission(mural.id, permissionId, user.id)
 
     if (success) {
-      onMuralUpdated()
+      onMuralUpdated(mural)
       toast({
         title: "Permiso eliminado",
         description: "El usuario ya no tiene acceso al mural",
@@ -173,7 +174,7 @@ export function ShareMuralDialog({ open, onOpenChange, mural, onMuralUpdated }: 
     )
 
     if (success) {
-      onMuralUpdated()
+      onMuralUpdated(mural)
       toast({
         title: "Rol actualizado",
         description: `El rol de ${permission.userName} ha sido actualizado`,
@@ -223,9 +224,12 @@ export function ShareMuralDialog({ open, onOpenChange, mural, onMuralUpdated }: 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[550px]">
         <DialogHeader>
-          <DialogTitle className="text-xl bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-pink-600">
-            Compartir "{mural.title}"
+          <DialogTitle className="text-xl bg-clip-text text-transparent bg-gradient-to-r from-purple-500 to-violet-600">
+            Compartir mural
           </DialogTitle>
+          <DialogDescription>
+            Administra quién tiene acceso a tu mural y con qué nivel de permisos.
+          </DialogDescription>
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>

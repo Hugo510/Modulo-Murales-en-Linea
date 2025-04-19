@@ -9,6 +9,8 @@ import { Trash, Edit, Check, X, LinkIcon, ImageIcon, FileText, Video } from "luc
 import Draggable from "react-draggable"
 import { cn } from "@/lib/utils"
 import type { MuralItem as IMuralItem } from "@/types/mural"
+import { logger } from "@/utils/logger"
+import { isValidUUID, getConsistentUUID } from "@/utils/uuid"
 
 interface MuralItemProps {
   item: IMuralItem
@@ -42,26 +44,41 @@ export function MuralItem({
   // Aplicar estilos personalizados si están disponibles
   const itemStyle = item.style || {}
 
+  // IMPORTANTE: Usar la versión con caché para obtener IDs consistentes
+  // Almacenar el ID original para referencias en la IU
+  const originalId = item.id;
+  // Generar un UUID consistente para interactuar con la API
+  const safeItemId = isValidUUID(originalId) ? originalId : getConsistentUUID(originalId);
+
   useEffect(() => {
     setPosition(item.position)
   }, [item.position])
 
   const handleDragStop = (_e: any, data: { x: number; y: number }) => {
     const newPosition = { x: data.x, y: data.y }
+    logger.debug(`Elemento ${safeItemId} movido a nueva posición`, newPosition, "MuralItem")
+
     setPosition(newPosition)
     if (onUpdate) {
-      onUpdate(item.id, { position: newPosition })
+      onUpdate(safeItemId, { position: newPosition })
     }
   }
 
   const handleEdit = () => {
     if (readOnly) return
+    logger.debug(`Iniciando edición del elemento ${safeItemId}`, undefined, "MuralItem")
     setIsEditing(true)
   }
 
   const handleSave = () => {
+    logger.debug(
+      `Guardando cambios del elemento ${safeItemId}`,
+      { content: editedContent, title: editedTitle },
+      "MuralItem"
+    )
+
     if (onUpdate) {
-      onUpdate(item.id, {
+      onUpdate(safeItemId, {
         content: editedContent,
         title: editedTitle || undefined,
       })
@@ -70,14 +87,16 @@ export function MuralItem({
   }
 
   const handleCancel = () => {
+    logger.debug(`Cancelando edición del elemento ${safeItemId}`, undefined, "MuralItem")
     setEditedContent(item.content)
     setEditedTitle(item.title || "")
     setIsEditing(false)
   }
 
   const handleDelete = () => {
+    logger.debug(`Solicitando eliminación del elemento ${safeItemId}`, undefined, "MuralItem")
     if (onDelete) {
-      onDelete(item.id)
+      onDelete(safeItemId)
     }
   }
 
@@ -199,6 +218,11 @@ export function MuralItem({
     }
   }
 
+  // Registros sólo en desarrollo
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`MuralItem ${safeItemId} - readOnly=${readOnly} - onUpdate=${!!onUpdate} - onDelete=${!!onDelete}`)
+  }
+
   return (
     <Draggable
       nodeRef={nodeRef}
@@ -219,7 +243,7 @@ export function MuralItem({
           zIndex,
           width: item.type === "text" ? "300px" : item.type === "image" || item.type === "video" ? "400px" : "350px",
         }}
-        onClick={() => onFocus(item.id)}
+        onClick={() => onFocus(safeItemId)}
       >
         <Card
           className={cn(
@@ -237,24 +261,28 @@ export function MuralItem({
             transform: `rotate(${itemStyle.rotation}deg)`,
           }}
         >
-          {!readOnly && (
-            <div className="absolute top-0 right-0 p-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7 rounded-full bg-white/80 hover:bg-white"
-                onClick={handleEdit}
-              >
-                <Edit className="h-3.5 w-3.5 text-blue-500" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="h-7 w-7 rounded-full bg-white/80 hover:bg-white"
-                onClick={handleDelete}
-              >
-                <Trash className="h-3.5 w-3.5 text-red-500" />
-              </Button>
+          {(!readOnly || !!onUpdate) && (
+            <div className="absolute top-0 right-0 p-1 flex gap-1 opacity-80 hover:opacity-100 transition-opacity">
+              {onUpdate && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 rounded-full bg-white/80 hover:bg-white"
+                  onClick={handleEdit}
+                >
+                  <Edit className="h-3.5 w-3.5 text-blue-500" />
+                </Button>
+              )}
+              {onDelete && (
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-7 w-7 rounded-full bg-white/80 hover:bg-white"
+                  onClick={handleDelete}
+                >
+                  <Trash className="h-3.5 w-3.5 text-red-500" />
+                </Button>
+              )}
             </div>
           )}
 
